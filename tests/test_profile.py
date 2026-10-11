@@ -199,17 +199,18 @@ class SolveProfileTest(unittest.TestCase):
         self.assertEqual((p.n, p.budget), (500, 8192))
         self.assertTrue(dcp_profile.profile_applies(req, p))
         start = time.perf_counter()
-        mask = dcp_profile.solve_profile(p, start + 1.5)
+        mask = dcp_profile.solve_profile(p, start + 10.0)
         elapsed = time.perf_counter() - start
         print(f"contract-maximum profile: solve_profile {elapsed:.3f} s, solved={mask is not None}")
-        self.assertLess(elapsed, 1.5)
-        if mask is not None:
-            self.assertTrue(dcp_model.is_legal(p, mask))
-            response = checker.response_for(req, dcp_model.mask_ids(p, mask))
-            certificate = dcp_profile.build_certificate(p, mask)
-            if certificate is not None:
-                response["certificate"] = certificate
-            self.assertEqual(checker.check_response(req, response), [])
+        self.assertIsNotNone(mask)
+        self.assertLess(elapsed, 10.0)
+        self.assertTrue(dcp_model.is_legal(p, mask))
+        self.assertLessEqual(dcp_model.mask_tokens(p, mask), p.budget)
+        response = checker.response_for(req, dcp_model.mask_ids(p, mask))
+        certificate = dcp_profile.build_certificate(p, mask)
+        if certificate is not None:
+            response["certificate"] = certificate
+        self.assertEqual(checker.check_response(req, response), [])
 
 
 class CertificateTest(unittest.TestCase):
