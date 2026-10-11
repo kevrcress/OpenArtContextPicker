@@ -7,14 +7,23 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-RESOURCES = REPO / "resources"
+
+
+def supplied(name: str) -> Path:
+    """A supplied file: at the root in the extracted package, under ``resources/`` in the repository."""
+    at_root = REPO / name
+    return at_root if at_root.is_file() else REPO / "resources" / name
+
+
 STUB = 'import sys\nsys.stdin.read()\nprint(\'{"status":"invalid","reason":"stub"}\')\n'
 
 
@@ -35,11 +44,15 @@ def _sha(path: Path) -> str:
 
 
 def _make_source(root: Path) -> Path:
-    """A throwaway source tree with copies of the supplied files and some files that must not ship."""
+    """A throwaway repo-shaped source tree: the supplied files under ``resources/`` plus files that must not ship.
+
+    Built from ``supplied`` so it is the same tree whether the tests run in the
+    repository or in the extracted package (which has no ``resources/`` folder).
+    """
     source = root / "src"
     (source / "resources").mkdir(parents=True)
     for name in build_package.RESOURCE_COPIES:
-        shutil.copyfile(RESOURCES / name, source / "resources" / name)
+        shutil.copyfile(supplied(name), source / "resources" / name)
     (source / "resources" / "task.md").write_text("not shipped\n")
     (source / "context_solver.py").write_text(STUB)
     (source / "dcp_model.py").write_text("X = 1\n")
@@ -58,11 +71,24 @@ def _make_source(root: Path) -> Path:
 
 
 class BuildPackageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # The supplied corpus is large: locate and copy it out of the real tree once per class.
+        cls._class_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._class_tmp.cleanup)
+        cls.template = _make_source(Path(cls._class_tmp.name))
+        cls.supplied_bytes = {name: (cls.template / "resources" / name).read_bytes()
+                              for name in build_package.RESOURCE_COPIES}
+
+    def _new_source(self, root: Path) -> Path:
+        """A private, writable copy of the class's source tree at ``root/src``."""
+        return Path(shutil.copytree(self.template, root / "src"))
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        self.source = _make_source(self.root)
+        self.source = self._new_source(self.root)
         self.out = self.root / "out"
 
     def _packaged(self) -> set[str]:
@@ -70,7 +96,7 @@ class BuildPackageTests(unittest.TestCase):
 
     def test_baseline_matches_repo_resources(self) -> None:
         for name, expected in build_package.RESOURCE_BASELINE.items():
-            self.assertEqual(_sha(RESOURCES / name), expected, name)
+            self.assertEqual(_sha(supplied(name)), expected, name)
         self.assertEqual(check_results.RUNNER_SHA256, build_package.RESOURCE_BASELINE["benchmark_runner.py"])
         self.assertEqual(check_results.INPUTS_SHA256, build_package.RESOURCE_BASELINE["benchmark_inputs.json"])
 
@@ -80,7 +106,8 @@ class BuildPackageTests(unittest.TestCase):
             "context_solver.py", "dcp_model.py", "README.md", "tests/test_a.py", "tests/data/case.json",
             "tools/t.py", "benchmark_runner.py", "benchmark_inputs.json", "director_session.json"})
         for name in build_package.RESOURCE_COPIES:
-            self.assertEqual((self.out / name).read_bytes(), (RESOURCES / name).read_bytes(), name)
+            self.assertEqual((self.out / name).read_bytes(), self.supplied_bytes[name], name)
+            self.assertEqual(self.supplied_bytes[name], supplied(name).read_bytes(), name)
 
     def test_recorder_output_is_copied_when_present(self) -> None:
         (self.source / "benchmark_results.json").write_text("{}\n")
@@ -91,7 +118,7 @@ class BuildPackageTests(unittest.TestCase):
     def test_refuses_on_resource_hash_mismatch(self) -> None:
         for name in build_package.RESOURCE_BASELINE:
             with self.subTest(name=name):
-                source = _make_source(self.root / name)
+                source = self._new_source(self.root / name)
                 with (source / "resources" / name).open("ab") as handle:
                     handle.write(b"\n")
                 out = self.root / name / "out"
@@ -127,12 +154,42 @@ class BuildPackageTests(unittest.TestCase):
         changed = dict(good, **{"dcp_model.py": "0" * 64})
         missing = {k: v for k, v in good.items() if k != "tools/t.py"}
         extra = dict(good, **{"dcp_gone.py": "0" * 64})
-        for label, sources in (("changed", changed), ("missing", missing), ("extra", extra)):
+        cases = (("changed", changed, "changed since the recorded run: dcp_model.py"),
+                 ("missing", missing, "not in the recorded run: tools/t.py"),
+                 ("extra", extra, "recorded but not in the package: dcp_gone.py"))
+        for label, sources, reason in cases:
             with self.subTest(label=label):
                 self._write_results(sources)
                 out = self.root / f"out_{label}"
-                args = ["--source", str(self.source), "--out", str(out), "--verify-results"]
-                self.assertEqual(build_package.main(args), 1)
+                self.assertEqual(self._failed_final_build(self.source, out), 1)
+                self.assertIn(reason, self._message)
+
+    def _failed_final_build(self, source: Path, out: Path) -> int:
+        """Run a final build expected to fail; keep its message and assert it left no output at all."""
+        args = ["--source", str(source), "--out", str(out), "--verify-results"]
+        with contextlib.redirect_stderr(io.StringIO()) as text, contextlib.redirect_stdout(io.StringIO()):
+            code = build_package.main(args)  # an uncaught exception here is a traceback for the user
+        self._message = text.getvalue()
+        self.assertFalse(out.exists(), "a failed final build must not leave the output directory")
+        leftovers = [p.name for p in out.parent.iterdir() if p.name.startswith(f".{out.name}.tmp-")]
+        self.assertEqual(leftovers, [], "the temporary build directory is removed")
+        self.assertIn("no output was written", self._message)
+        return code
+
+    def test_successful_build_leaves_no_temporary_directory(self) -> None:
+        self._write_results(self._recorded_sources())
+        for label, flags in (("staging", []), ("final", ["--verify-results"])):
+            with self.subTest(label=label):
+                out = self.root / f"ok_{label}"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(build_package.main(["--source", str(self.source), "--out", str(out), *flags]), 0)
+                self.assertTrue((out / "context_solver.py").is_file())
+                self.assertEqual([p.name for p in self.root.iterdir() if ".tmp-" in p.name], [])
+
+    def test_empty_existing_out_is_filled(self) -> None:
+        self.out.mkdir()
+        build_package.build(self.source, self.out)
+        self.assertIn("context_solver.py", self._packaged())
 
     def test_without_flag_results_are_not_verified(self) -> None:
         self._write_results({})
@@ -143,7 +200,7 @@ class BuildPackageTests(unittest.TestCase):
                          {"benchmark_results.json", "benchmark_run.log", "README.md"})
         for name in build_package.REQUIRED_FINAL_FILES:
             with self.subTest(missing=name):
-                source = _make_source(self.root / f"no_{name}")
+                source = self._new_source(self.root / f"no_{name}")
                 (source / "benchmark_results.json").write_text(
                     json.dumps({"python_sources_after": self._recorded_sources()}))
                 (source / "benchmark_run.log").write_text("rc=0\n")
@@ -170,11 +227,34 @@ class BuildPackageTests(unittest.TestCase):
     def test_verify_results_rejects_unreadable_inventory(self) -> None:
         for label, text in (("no key", "{}"), ("not json", "{"), ("not an object", '{"python_sources_after": []}')):
             with self.subTest(label=label):
-                source = _make_source(self.root / label.replace(" ", "_"))
+                source = self._new_source(self.root / label.replace(" ", "_"))
                 (source / "benchmark_results.json").write_text(text)
                 (source / "benchmark_run.log").write_text("rc=0\n")
-                with self.assertRaises(build_package.PackageError):
-                    build_package.build(source, self.root / label.replace(" ", "_") / "out", verify=True)
+                out = self.root / label.replace(" ", "_") / "out"
+                with self.assertRaisesRegex(build_package.PackageError, "python_sources_after"):
+                    build_package.build(source, out, verify=True)
+                self.assertFalse(out.exists())
+                self.assertEqual(self._failed_final_build(source, out), 1)
+                self.assertIn("python_sources_after", self._message)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root can read a mode-0 file")
+    def test_verify_results_rejects_an_unreadable_results_file(self) -> None:
+        self._write_results(self._recorded_sources())
+        results = self.source / "benchmark_results.json"
+        os.chmod(results, 0)
+        self.addCleanup(os.chmod, results, 0o644)
+        with self.assertRaises(PermissionError):
+            results.read_bytes()
+        self.assertEqual(self._failed_final_build(self.source, self.out), 1)
+        self.assertIn("benchmark_results.json", self._message)
+        self.assertIn("Permission denied", self._message)
+        # The same failure met inside verify_results (file unreadable in the package itself).
+        os.chmod(results, 0o644)
+        build_package.build(self.source, self.out)
+        os.chmod(self.out / "benchmark_results.json", 0)
+        self.addCleanup(os.chmod, self.out / "benchmark_results.json", 0o644)
+        with self.assertRaisesRegex(build_package.PackageError, "cannot read benchmark_results.json"):
+            build_package.verify_results(self.out)
 
 
 class RunRecordedScriptTests(unittest.TestCase):
@@ -190,6 +270,67 @@ class RunRecordedScriptTests(unittest.TestCase):
         self.assertIn('sh -c "${RECORD_CMD}" || rc=$?', text)
         self.assertIn('exit "${rc}"', text)
         self.assertIn("set -euo pipefail", text)
+
+    FAKE_DOCKER = """#!/bin/sh
+# Stands in for docker: "info" succeeds; "run" exits with FAKE_DOCKER_RC and, when
+# that is 0, writes the results file into the directory mounted with -v.
+if [ "$1" = "info" ]; then exit 0; fi
+rc="${FAKE_DOCKER_RC:-7}"
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-v" ] && [ "$rc" = "0" ]; then echo '{}' > "${arg%:/work}/benchmark_results.json"; fi
+  prev="$arg"
+done
+exit "$rc"
+"""
+
+    def _run_script(self, docker_rc: int, *, failing_find: bool = False, write_results: bool = True):
+        """Execute run_recorded.sh with a fake ``docker`` (and optionally a failing ``find``) first on PATH."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        fake_bin, pkg = root / "bin", root / "pkg"
+        fake_bin.mkdir()
+        (pkg / "__pycache__").mkdir(parents=True)
+        for name in ("context_solver.py", "benchmark_runner.py", "benchmark_inputs.json"):
+            (pkg / name).write_text("x\n")
+        fakes = {"docker": self.FAKE_DOCKER if write_results else "#!/bin/sh\n[ \"$1\" = info ] && exit 0\n"
+                                                                 f"exit {docker_rc}\n"}
+        if failing_find:
+            fakes["find"] = "#!/bin/sh\necho 'fake find: cleanup failed' >&2\nexit 9\n"
+        for name, body in fakes.items():
+            (fake_bin / name).write_text(body)
+            (fake_bin / name).chmod(0o755)
+        env = dict(os.environ, PATH=f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                   FAKE_DOCKER_RC=str(docker_rc))
+        done = subprocess.run(["bash", str(REPO / "tools" / "run_recorded.sh"), str(pkg)], env=env,
+                              capture_output=True, text=True, timeout=60)
+        return done, pkg
+
+    def test_script_exits_with_the_recorder_status(self) -> None:
+        done, pkg = self._run_script(7)
+        self.assertEqual(done.returncode, 7, done.stderr)
+        self.assertIn("the recorder exited with status 7", done.stderr)
+        self.assertFalse((pkg / "__pycache__").exists(), "the real cleanup ran")
+
+    def test_failing_cleanup_does_not_mask_the_recorder_status(self) -> None:
+        done, pkg = self._run_script(7, failing_find=True)
+        self.assertIn("fake find: cleanup failed", done.stderr, "the cleanup step really failed")
+        self.assertTrue((pkg / "__pycache__").exists())
+        self.assertEqual(done.returncode, 7, done.stderr)
+        self.assertIn("the recorder exited with status 7", done.stderr)
+
+    def test_script_succeeds_when_the_recorder_does_even_if_cleanup_fails(self) -> None:
+        for failing_find in (False, True):
+            with self.subTest(failing_find=failing_find):
+                done, pkg = self._run_script(0, failing_find=failing_find)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertTrue((pkg / "benchmark_results.json").is_file())
+
+    def test_script_fails_when_no_results_file_is_produced(self) -> None:
+        done, _ = self._run_script(0, write_results=False)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("was not produced", done.stderr)
 
 
 class MakeZipTests(unittest.TestCase):
@@ -238,7 +379,7 @@ class CheckResultsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.checker = check_results.load_checker()
-        full = json.loads((RESOURCES / "benchmark_inputs.json").read_text(encoding="utf-8"))
+        full = json.loads(supplied("benchmark_inputs.json").read_text(encoding="utf-8"))
         by_id = {item["id"]: item for item in full["instances"]}
         cls.invalid_id = "i_93a288225d57a93686"
         cls.infeasible_id = "i_6bf2ce5fc66d4bad9e"
@@ -315,7 +456,7 @@ class CheckResultsTests(unittest.TestCase):
         self.assertEqual(set(results["instances"][0]), {"stdout", "stderr", "exit_code", "wall_ms", "peak_rss_kib",
                                                         "timed_out", "id", "input_sha256", "response",
                                                         "response_parse_error"})
-        recorder = (RESOURCES / "benchmark_runner.py").read_text(encoding="utf-8")
+        recorder = supplied("benchmark_runner.py").read_text(encoding="utf-8")
         for key in list(results) + list(results["environment"]) + list(results["instances"][0]):
             self.assertIn(f'"{key}"' if key not in ("id", "input_sha256") else f"{key}=", recorder, key)
 
@@ -378,6 +519,10 @@ class CheckResultsTests(unittest.TestCase):
                                                            ("python_sources_before", "python_sources_after")],
             "recorder beside the solver differs": lambda r: [r[k].__setitem__("benchmark_runner.py", "f" * 64)
                                                              for k in ("python_sources_before", "python_sources_after")],
+            "recorder missing from both inventories": lambda r: [r[k].pop("benchmark_runner.py") for k in
+                                                                 ("python_sources_before", "python_sources_after")],
+            "recorder missing from the before inventory": lambda r: r["python_sources_before"].pop(
+                "benchmark_runner.py"),
         }
         for label, mutate in cases.items():
             with self.subTest(label=label):
@@ -390,7 +535,72 @@ class CheckResultsTests(unittest.TestCase):
         results = self._results(self._good_records())
         for key in ("python_sources_before", "python_sources_after"):
             results[key].pop("benchmark_runner.py")
-        self.assertTrue(self._evaluate(results)["passed"], "recorder kept outside the solver directory")
+        summary = self._evaluate(results)
+        self.assertFalse(summary["passed"], "an authentic observation always lists the recorder")
+        failed = [c["check"] for c in summary["integrity"] if not c["ok"]]
+        self.assertEqual(failed, ["benchmark_runner.py is in both source inventories",
+                                  "python_sources_before/after[benchmark_runner.py] == runner_sha256"])
+        self.assertNotIn("not applicable", check_results.render(summary))
+
+    def _evaluate_pairs(self, mutate=None) -> dict:
+        ids = [rid for pair in check_results.CONSISTENCY_PAIRS for rid in pair]
+        responses = {rid: self._ok_response(rid) for rid in ids}
+        if mutate is not None:
+            mutate(responses)
+        corpus = {"schema": self.corpus["schema"], "instances": [self.by_id[rid] for rid in ids]}
+        records = [self._record(rid, responses[rid]) for rid in ids]
+        return check_results.evaluate(self._results(records), corpus, self.checker, expected_records=len(ids))
+
+    def test_consistency_capability_needs_the_core_checks_to_pass(self) -> None:
+        good = self._evaluate_pairs()
+        self.assertTrue(good["passed"], good["failed_ids"])
+        self.assertTrue(good["consistency_capability"]["passed"], good["consistency_capability"]["failures"])
+        self.assertTrue(all(p["evaluable"] and p["within_half_percent"] for p in good["consistency_pairs"]))
+        self.assertIn("CONSISTENCY CAPABILITY: PASS", check_results.render(good))
+        first, second = check_results.CONSISTENCY_PAIRS[0]
+
+        def wrong_total(responses):
+            responses[second]["tokens"] += 1
+
+        summary = self._evaluate_pairs(wrong_total)
+        rows = {row["id"]: row for row in summary["rows"]}
+        self.assertEqual(rows[first]["utility"], rows[second]["utility"], "utilities are still equal")
+        self.assertEqual(summary["failed_ids"], [second])
+        pair = summary["consistency_pairs"][0]
+        self.assertEqual((pair["evaluable"], pair["within_half_percent"], pair["L"]), (False, None, None))
+        self.assertFalse(summary["consistency_capability"]["passed"])
+        self.assertEqual(len(summary["consistency_capability"]["failures"]), 1)
+        self.assertIn("not evaluable", summary["consistency_capability"]["failures"][0])
+        self.assertIn(f"{second} fails the core checks", summary["consistency_capability"]["failures"][0])
+        text = check_results.render(summary)
+        self.assertIn("CONSISTENCY CAPABILITY: FAIL (1 of 3 pairs", text)
+
+        def all_wrong(responses):
+            for response in responses.values():
+                response["tokens"] += 1
+
+        summary = self._evaluate_pairs(all_wrong)
+        self.assertFalse(summary["consistency_capability"]["passed"], "the reviewer's reproduction")
+        self.assertIn("CONSISTENCY CAPABILITY: FAIL (3 of 3 pairs", check_results.render(summary))
+
+    def test_non_ok_pair_member_is_not_evaluable(self) -> None:
+        first = check_results.CONSISTENCY_PAIRS[0][0]
+        summary = self._evaluate_pairs(lambda r: r.__setitem__(first, {"status": "infeasible", "reason": "no"}))
+        self.assertFalse(summary["consistency_pairs"][0]["evaluable"])
+        self.assertFalse(summary["consistency_capability"]["passed"])
+
+    def test_certificate_on_a_record_with_core_problems_does_not_count(self) -> None:
+        request = self.by_id[self.profile_id]["request"]
+        zero = {"scale": 1, "budget_price": 0, "feature_prices": {fid: 0 for fid in request["features"]}}
+        wrong = dict(self._ok_response(self.profile_id), certificate=zero)
+        wrong["tokens"] += 1
+        summary = self._evaluate_one(self.profile_id, wrong)
+        self.assertEqual(summary["failed_ids"], [self.profile_id])
+        self.assertEqual(summary["certificates"], [], "no bound is reported for a record that fails the core checks")
+        capability = summary["certificate_capability"]
+        self.assertFalse(capability["passed"])
+        self.assertEqual(capability["failures"],
+                         [f"{self.profile_id}: the core checks fail, so a certificate here does not count"])
 
     def test_malformed_certificate_does_not_fail_the_core_verdict(self) -> None:
         legal = self._ok_response(self.feasible_id)
@@ -484,7 +694,7 @@ class CheckResultsTests(unittest.TestCase):
     def test_main_exit_codes_and_json_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            shutil.copyfile(RESOURCES / "benchmark_inputs.json", run_dir / "benchmark_inputs.json")
+            shutil.copyfile(supplied("benchmark_inputs.json"), run_dir / "benchmark_inputs.json")
             results = self._results(self._good_records())
             (run_dir / "benchmark_results.json").write_text(json.dumps(results), encoding="utf-8")
             out = run_dir / "summary.json"

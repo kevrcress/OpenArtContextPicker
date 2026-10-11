@@ -8,6 +8,10 @@ files from ``resources/``. The build refuses to run when a supplied file no
 longer matches its recorded SHA-256. With ``--verify-results`` (the final build)
 the results file, the run log and the README are required and every packaged
 ``*.py`` must match ``python_sources_after`` exactly.
+
+The package is assembled in a temporary directory beside ``--out`` and renamed
+to ``--out`` only after every check has passed, so a failed build leaves no
+output directory behind.
 """
 
 from __future__ import annotations
@@ -15,8 +19,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 # SHA-256 of the supplied files as received (integrity baseline from the research document).
@@ -90,7 +96,11 @@ def verify_results(out: Path) -> None:
     require_final_files({name for name in REQUIRED_FINAL_FILES if (out / name).is_file()})
     results_path = out / RESULTS_NAME
     try:
-        recorded = json.loads(results_path.read_text(encoding="utf-8"))["python_sources_after"]
+        text = results_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PackageError(f"cannot read {RESULTS_NAME}: {exc}") from exc
+    try:
+        recorded = json.loads(text)["python_sources_after"]
     except (ValueError, KeyError, TypeError) as exc:
         raise PackageError(f"{RESULTS_NAME} has no readable python_sources_after: {exc!r}") from exc
     if not isinstance(recorded, dict):
@@ -107,8 +117,28 @@ def verify_results(out: Path) -> None:
         raise PackageError("package does not match python_sources_after:\n  " + "\n  ".join(problems))
 
 
+def _fill(plan: dict[str, Path], stage: Path, *, verify: bool) -> None:
+    """Copy ``plan`` into ``stage`` and run every post-copy check there."""
+    for rel, src in plan.items():
+        dest = stage / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except OSError as exc:
+            raise PackageError(f"cannot copy {rel} into the package: {exc}") from exc
+    for name, expected in RESOURCE_BASELINE.items():
+        if sha256_file(stage / name) != expected:
+            raise PackageError(f"copied {name} does not match the baseline")
+    if verify:
+        verify_results(stage)
+
+
 def build(source: Path, out: Path, *, verify: bool = False) -> list[str]:
-    """Copy the package files from ``source`` into ``out``; return the sorted package paths."""
+    """Assemble the package beside ``out`` and rename it to ``out`` once every check passes.
+
+    Returns the sorted package paths. On any failure the temporary directory is
+    removed and ``out`` is left as it was (absent, or empty).
+    """
     source = source.resolve()
     out = out.resolve()
     check_resources(source)
@@ -119,15 +149,22 @@ def build(source: Path, out: Path, *, verify: bool = False) -> list[str]:
     plan = planned_files(source)
     if verify:
         require_final_files(plan)  # fail before anything is copied
-    for rel, src in plan.items():
-        dest = out / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-    for name, expected in RESOURCE_BASELINE.items():
-        if sha256_file(out / name) != expected:
-            raise PackageError(f"copied {name} does not match the baseline")
-    if verify:
-        verify_results(out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=f".{out.name}.tmp-", dir=out.parent))
+    except OSError as exc:
+        raise PackageError(f"cannot create a temporary directory beside {out}: {exc}") from exc
+    try:
+        _fill(plan, stage, verify=verify)
+        os.chmod(stage, 0o755)
+        if out.exists():
+            out.rmdir()  # checked empty above
+        os.replace(stage, out)
+    except BaseException as exc:
+        shutil.rmtree(stage, ignore_errors=True)
+        if isinstance(exc, OSError):
+            raise PackageError(f"cannot finish the package at {out}: {exc}") from exc
+        raise
     return sorted(plan)
 
 
@@ -142,8 +179,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         files = build(args.source, args.out, verify=args.verify_results)
-    except PackageError as exc:
-        print(f"build_package: {exc}", file=sys.stderr)
+    except (PackageError, OSError) as exc:
+        print(f"build_package: {exc}; no output was written to {args.out}", file=sys.stderr)
         return 1
     if "README.md" not in files:
         print("build_package: warning: no README.md in the source tree", file=sys.stderr)
