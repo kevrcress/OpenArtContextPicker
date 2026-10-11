@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import resource
+import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -87,6 +90,45 @@ def big_request() -> dict:
         "budget": 8192,
         "mandatory": [f"card{i}" for i in range(0, 500, 50)],
         "contradictions": pairs,
+    }
+
+
+def maximum_request(filler: str) -> dict:
+    """Return a valid request at every contract maximum at once, with each card text made only of the filler.
+
+    Identifiers are 64 characters padded with colons. Each version lists the 8 versions before it as parents (as
+    many as exist for the first 8), and each card supersedes 8 cards of an earlier version where any exist.
+    """
+
+    def name(kind: str, number: int) -> str:
+        return f"{kind}{number}".rjust(64, ":")
+
+    def version_of(position: int) -> int:
+        return position * 96 // 500
+
+    versions = [{"id": name("v", i), "parents": [name("v", j) for j in range(max(0, i - 8), i)]} for i in range(96)]
+    cards = []
+    for i in range(500):
+        cards.append(
+            card(
+                name("c", i),
+                name("v", version_of(i)),
+                supersedes=[name("c", j) for j in range(8)] if version_of(i) > version_of(7) else [],
+                requires=[name("c", (i + k) % 500) for k in range(1, 9)],
+                conflict_group=name("g", i),
+                tokens=512,
+                covers=[name("f", (i + k) % 1024) for k in range(64)],
+                text=filler * 2048,
+            )
+        )
+    return {
+        "versions": versions,
+        "cards": cards,
+        "features": {name("f", i): 1000 for i in range(1024)},
+        "head": name("v", 95),
+        "budget": 8192,
+        "mandatory": [name("c", i) for i in range(500)],
+        "contradictions": [[name("c", i), name("c", (i + k) % 500)] for i in range(500) for k in range(1, 21)],
     }
 
 
@@ -694,6 +736,75 @@ class TestContradictions(ValidateTestCase):
         self.assert_valid(request)
         request["contradictions"].append(["card0", "card400"])
         self.assert_invalid(request)
+
+
+class TestStructureCounts(ValidateTestCase):
+    """The byte-count caps reject impossible input before parsing and never reject a valid request."""
+
+    # Per text filler: the bytes its cap counts, the cap, and how far below the cap the maximum request may sit.
+    # Distinct identifiers need a few non-colon characters, so the colon count cannot reach its bound exactly.
+    COUNTED = {
+        ",": ((b",",), "_MAX_COMMA_BYTES", 4096),
+        "[": ((b"[", b"{"), "_MAX_OPENER_BYTES", 4096),
+        "{": ((b"[", b"{"), "_MAX_OPENER_BYTES", 4096),
+        ":": ((b":",), "_MAX_COLON_BYTES", 300_000),
+        '"': ((b'"',), "_MAX_QUOTE_BYTES", 4096),
+    }
+
+    def test_validate_request_contract_maximum_request_valid_for_every_text_filler(self):
+        for filler, (counted, cap_name, slack) in self.COUNTED.items():
+            with self.subTest(filler=filler):
+                request = maximum_request(filler)
+                raw = enc(request)
+                self.assertLessEqual(len(raw), MAX_BYTES)
+                self.assertEqual(validate_request(raw), request)
+                # The request sits just under its cap, so the cap is tight as well as safe.
+                count = sum(raw.count(byte) for byte in counted)
+                cap = getattr(dcp_validate, cap_name)
+                self.assertLessEqual(count, cap)
+                self.assertLess(cap - count, slack)
+
+    def test_validate_request_contract_maximum_request_pretty_printed_valid(self):
+        request = maximum_request(",")
+        raw = json.dumps(request, indent=8).encode("utf-8")
+        self.assertLessEqual(len(raw), MAX_BYTES)
+        self.assertEqual(validate_request(raw), request)
+        padded = b" \n\t\r" * ((MAX_BYTES - len(raw)) // 4) + raw
+        self.assertEqual(validate_request(padded), request)
+
+    def test_validate_request_count_above_each_cap_invalid(self):
+        for unit in (b",", b"[", b"{", b":", b'"'):
+            with self.subTest(unit=unit):
+                self.assert_invalid(b'{"cards":' + unit * 6_000_000 + b"}")
+        with self.assertRaises(InvalidRequest) as caught:
+            validate_request(b'{"cards":[' + b"[]," * 2_000_000 + b"[]]}")
+        self.assertIn("more", str(caught.exception))
+
+    def test_validate_request_16_mib_of_tiny_arrays_invalid_under_200_mib_peak_rss(self):
+        child = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from dcp_validate import MAX_BYTES, InvalidRequest, validate_request\n"
+            "head, tail = b'{\"cards\":[', b'[]]}'\n"
+            "raw = head + b'[],' * ((MAX_BYTES - len(head) - len(tail)) // 3) + tail\n"
+            "raw += b' ' * (MAX_BYTES - len(raw))\n"
+            "assert len(raw) == MAX_BYTES\n"
+            "try:\n"
+            "    validate_request(raw)\n"
+            "    print('valid')\n"
+            "except InvalidRequest:\n"
+            "    print('invalid')\n"
+        )
+        started = time.perf_counter()
+        done = subprocess.run([sys.executable, "-c", child, str(_ROOT)], capture_output=True, text=True, timeout=30)
+        elapsed = time.perf_counter() - started
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "invalid")
+        # ru_maxrss is in bytes on macOS and in kilobytes on Linux.
+        unit = 1 if sys.platform == "darwin" else 1024
+        peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * unit
+        self.assertLess(peak, 200 * 1024 * 1024)
+        self.assertLess(elapsed, 5.0)
 
 
 class TestErrorsAndPerformance(ValidateTestCase):
