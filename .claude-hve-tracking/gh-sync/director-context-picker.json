@@ -1,11 +1,131 @@
 {
   "task_slug": "director-context-picker",
   "repo": "kevrcress/OpenArtContextPicker",
-  "milestone": { "number": 1, "title": "director-context-picker" },
-  "parent_issue": { "number": 1, "db_id": 5804493990 },
-  "phases": [],
-  "sync_moments_completed": ["research"],
-  "last_sync": "2026-10-11T19:40:14Z",
+  "milestone": {
+    "number": 1,
+    "title": "director-context-picker"
+  },
+  "parent_issue": {
+    "number": 1,
+    "db_id": 5804493990
+  },
+  "phases": [
+    {
+      "phase": 1,
+      "title": "Strict input validation",
+      "issue_number": 2,
+      "issue_db_id": 5804590979,
+      "steps_total": 3,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 2,
+      "title": "Model and legality core",
+      "issue_number": 3,
+      "issue_db_id": 5804591379,
+      "steps_total": 4,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 3,
+      "title": "Independent legality checker, oracle and generators",
+      "issue_number": 4,
+      "issue_db_id": 5804591731,
+      "steps_total": 5,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 4,
+      "title": "Packaging and Docker benchmark harness",
+      "issue_number": 5,
+      "issue_db_id": 5804592259,
+      "steps_total": 4,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 5,
+      "title": "Exact search for 24 or fewer active cards",
+      "issue_number": 6,
+      "issue_db_id": 5804592671,
+      "steps_total": 3,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 6,
+      "title": "Large-instance search",
+      "issue_number": 7,
+      "issue_db_id": 5804593108,
+      "steps_total": 5,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 7,
+      "title": "Certificate-profile knapsack and certificate",
+      "issue_number": 8,
+      "issue_db_id": 5804593471,
+      "steps_total": 4,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 8,
+      "title": "CLI, pipeline and corpus regression",
+      "issue_number": 9,
+      "issue_db_id": 5804593862,
+      "steps_total": 9,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 9,
+      "title": "Recorded benchmark run",
+      "issue_number": 10,
+      "issue_db_id": 5804594354,
+      "steps_total": 4,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 10,
+      "title": "README",
+      "issue_number": 11,
+      "issue_db_id": 5804594745,
+      "steps_total": 2,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    },
+    {
+      "phase": 11,
+      "title": "README numbers, ZIP build and clean-extraction check",
+      "issue_number": 12,
+      "issue_db_id": 5804595186,
+      "steps_total": 4,
+      "steps_checked": 0,
+      "state": "open",
+      "branch": null
+    }
+  ],
+  "sync_moments_completed": [
+    "research",
+    "plan"
+  ],
+  "last_sync": "2026-10-11T19:54:32Z",
   "project": {
     "number": 5,
     "owner": "kevrcress",

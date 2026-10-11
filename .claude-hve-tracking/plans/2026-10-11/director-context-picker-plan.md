@@ -200,3 +200,18 @@ Unit tests per module; an independent checker and brute-force oracle that share 
 - DR-006 contract maxima end to end: step 8.4b; `gen.py` gains `max_request` (details section 4).
 
 Minor items taken: bound wording tightened and moves restricted to usable cards (details sections 5 and 6); `build/` ignored via `.gitignore`, owned by Phase 4; instance count corrected to 18; search-deadline wording made consistent; response when `build_problem` itself crashes stated (details section 8); long exact runs on the three mid instances as 99% evidence (step 8.7). Not taken: a relaxation upper bound per large coupled instance (DR-007 second half), for time; named tests for R-05, R-15, R-21, R-34, R-42 reverse, R-75, R-85, A-14 are folded into steps 1.2 and 8.2 at the implementor's discretion (DR-008, Minor). A-15, A-18 and A-19 need no code: lone surrogates in `text` are accepted and never echoed, determinism is not required, and `mandatory` has no separate size limit (theme A artifact).
+
+## Requirements added after plan approval
+
+### 2026-10-11 12:57 PDT — implementation lands through reviewable pull requests (owner)
+
+Owner's words: "Let's make sure to breakup chunks of implementation into reviewable pieces so that I can have Codex review, ideally as work broken up into appropriate PRs that can be merged into main after Codex's review and any re-work is done from the review".
+
+This supersedes the kick-off's "Solo repo, no pull requests ... you integrate to main and push at each phase boundary". How every later phase command applies it:
+
+- One pull request per plan phase, base `main`, branch `phase-N-<slug>`, body with a TL;DR, the files the phase owns, its gate command and result, and `Refs #<issue>` (no closing keywords). Milestone `director-context-picker`.
+- Implementation never goes to `main` directly. The owner merges each PR after Codex's review and any rework. The orchestrator does not merge PRs and does not run Codex; it triages review findings and dispatches rework onto the phase branch.
+- So that later phases are not blocked on review, phase branches are also merged into a local-and-pushed branch `integration` (main plus every delivered phase branch). A phase with dependencies starts from `main` plus `git merge integration`; its PR shows dependency files until those PRs merge, and its body lists the owned files to review. After a dependency PR merges, `main` is merged into the dependent branches.
+- Tracking artifacts under `.claude-hve-tracking/` and repo hygiene (`.gitignore`) are not implementation and continue to be committed to `main` directly.
+- Review rework and the recorded run: a `.py` change after the recorded run forces a rerun (Phase 9). Codex findings that arrive before the recorded run starts are reworked first. Findings that arrive later are reworked only if a rerun still fits before the deadline; otherwise they are listed as unfixed in the final report. The ZIP is built from `integration` (identical to `main` once every phase PR is merged); the final report states which PRs were merged at build time.
+- Board: a phase issue moves to In review when its PR opens and is closed by gh-tracker when its phase is Complete and its PR is merged; if the PR is still open at the end, the issue stays In review with a comment saying why.
