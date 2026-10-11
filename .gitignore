@@ -1,0 +1,25 @@
+# Credentials
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# HVE tracking: regenerable output only
+.claude-hve-tracking/**/subagents/
+.claude-hve-tracking/sandbox/
+.claude-hve-tracking/reviews/pr/**/diff.patch
+
+# Test gate logs
+gate.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Build output
+director-context.zip
+
+# macOS
+.DS_Store
