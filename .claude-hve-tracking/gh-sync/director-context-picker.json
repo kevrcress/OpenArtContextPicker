@@ -87,7 +87,7 @@
       "issue_db_id": 5804593862,
       "steps_total": 9,
       "steps_checked": 9,
-      "state": "open",
+      "state": "closed",
       "branch": null
     },
     {
@@ -107,7 +107,7 @@
       "issue_db_id": 5804594745,
       "steps_total": 2,
       "steps_checked": 2,
-      "state": "open",
+      "state": "closed",
       "branch": null
     },
     {
@@ -116,8 +116,8 @@
       "issue_number": 12,
       "issue_db_id": 5804595186,
       "steps_total": 4,
-      "steps_checked": 0,
-      "state": "open",
+      "steps_checked": 4,
+      "state": "closed",
       "branch": null
     }
   ],
@@ -125,9 +125,10 @@
     "research",
     "plan",
     "implement",
-    "review"
+    "review",
+    "implement"
   ],
-  "last_sync": "2026-10-11T21:23:19Z",
+  "last_sync": "2026-10-11T21:27:43Z",
   "project": {
     "number": 5,
     "owner": "kevrcress",
