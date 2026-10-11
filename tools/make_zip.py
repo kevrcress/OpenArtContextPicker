@@ -3,7 +3,9 @@
 Usage: python3.11 tools/make_zip.py <dir> <zip-path>
 
 Entries are sorted, carry a fixed timestamp and are deflated, so the same
-directory content always gives the same archive bytes.
+directory content always gives the same archive bytes. Dot-directories such as
+``.claude-hve-tracking/`` are archived; caches, compiled files and a stray
+``gate.log`` are not.
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ import zipfile
 from pathlib import Path
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-EXCLUDED_NAMES = {"__pycache__", ".DS_Store"}
+EXCLUDED_NAMES = {"__pycache__", ".DS_Store", "gate.log"}
+EXCLUDED_SUFFIXES = {".pyc"}
 
 
 def package_entries(root: Path, skip: Path | None = None) -> list[tuple[str, Path]]:
@@ -23,6 +26,8 @@ def package_entries(root: Path, skip: Path | None = None) -> list[tuple[str, Pat
     for path in root.rglob("*"):
         rel = path.relative_to(root)
         if not path.is_file() or any(part in EXCLUDED_NAMES for part in rel.parts):
+            continue
+        if rel.suffix in EXCLUDED_SUFFIXES:
             continue
         if skip is not None and path.resolve() == skip:
             continue

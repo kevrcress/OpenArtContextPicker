@@ -2,7 +2,7 @@
 # Run the supplied recorder on a package directory inside Docker
 # (2 CPUs, no network, no memory cap). Writes benchmark_results.json and
 # benchmark_run.log into the directory. Exits with the recorder's status when
-# the recorder fails.
+# the recorder fails; nothing after the docker call can replace that status.
 set -euo pipefail
 
 readonly IMAGE="python:3.11-slim"
@@ -58,16 +58,19 @@ main() {
   docker run --rm --cpus=2 --network none -v "${dir}":/work -w /work \
     "${IMAGE}" sh -c "${RECORD_CMD}" || rc=$?
 
-  find "${dir}" -type d -name __pycache__ -prune -exec rm -rf {} +
+  # Best-effort cleanup: its failure must neither end the script (errexit) nor
+  # replace the recorder's status. The same holds for the messages below.
+  find "${dir}" -type d -name __pycache__ -prune -exec rm -rf {} + || true
 
   if (( rc != 0 )); then
-    err "the recorder exited with status ${rc}; see ${dir}/benchmark_run.log"
+    err "the recorder exited with status ${rc}; see ${dir}/benchmark_run.log" || true
     exit "${rc}"
   fi
   if [[ ! -f "${dir}/${RESULTS}" ]]; then
-    err "${RESULTS} was not produced; see ${dir}/benchmark_run.log"
+    err "${RESULTS} was not produced; see ${dir}/benchmark_run.log" || true
     exit 1
   fi
+  exit 0
 }
 
 main "$@"

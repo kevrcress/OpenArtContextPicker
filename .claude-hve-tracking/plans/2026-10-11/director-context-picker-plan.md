@@ -199,7 +199,7 @@ Unit tests per module; an independent checker and brute-force oracle that share 
 - DR-005 randomized differential test of ok versus infeasible: step 8.4a.
 - DR-006 contract maxima end to end: step 8.4b; `gen.py` gains `max_request` (details section 4).
 
-Minor items taken: bound wording tightened and moves restricted to usable cards (details sections 5 and 6); `build/` ignored via `.gitignore`, owned by Phase 4; instance count corrected to 18; search-deadline wording made consistent; response when `build_problem` itself crashes stated (details section 8); long exact runs on the three mid instances as 99% evidence (step 8.7). Not taken: a relaxation upper bound per large coupled instance (DR-007 second half), for time; named tests for R-05, R-15, R-21, R-34, R-42 reverse, R-75, R-85, A-14 are folded into steps 1.2 and 8.2 at the implementor's discretion (DR-008, Minor). A-15, A-18 and A-19 need no code: lone surrogates in `text` are accepted and never echoed, determinism is not required, and `mandatory` has no separate size limit (theme A artifact).
+Minor items taken: bound wording tightened and moves restricted to usable cards (details sections 5 and 6); `build/` ignored via `.gitignore`, owned by Phase 4; instance count corrected to 18; search-deadline wording made consistent; response when `build_problem` itself crashes stated (details section 8); long exact runs on the three mid instances as 99% evidence (step 8.7). Not taken: a relaxation upper bound per large coupled instance (DR-007 second half), for time; named tests for R-05, R-15, R-21, R-34, R-42 reverse, R-75, R-85, A-14 are folded into steps 1.2 and 8.2 at the implementor's discretion (DR-008, Minor). A-15, A-18 and A-19 need no code: lone surrogates in `text` are accepted and never echoed (superseded — see Correction 2026-10-11), determinism is not required, and `mandatory` has no separate size limit (theme A artifact).
 
 ## Requirements added after plan approval
 
@@ -241,3 +241,7 @@ The owner pasted the note that accompanies `docs/reference-scenarios/` (102 scen
 - The full regression, including this test, runs as a gate (`<cmd> > gate.log 2>&1; echo rc=$?`) before the recorded benchmark run (step 9.1).
 - They are a cross-check. The project's own oracle and checker stay; `build_scenarios.py` is not imported by any test. If the solver and a scenario disagree, the contract clause is read first, and a scenario judged wrong is reported to the owner by id with the reason; no expected answer is edited.
 - Not covered by them and still owed by the project's own tests: 250 to 500 card instances, exactness at 19 to 24 active cards, invalid UTF-8, the 16 MiB limit, the certificate.
+
+### Correction (2026-10-11)
+
+The "Validation response" section said lone surrogates in `text` are accepted and need no code (A-15). The external review of PR #14 showed that reading to be the weaker one: a surrogate code point is not a Unicode scalar value and cannot be encoded as UTF-8, so `dcp_validate.py` rejects it as of `32d0751`. A-18 and A-19 stand.
