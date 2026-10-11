@@ -15,6 +15,14 @@ import oracle
 from dcp_exact import solve_exact
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _supplied(name):
+    """Locate a supplied file at the package root, else under resources/; fail if absent."""
+    for candidate in (os.path.join(_ROOT, name), os.path.join(_ROOT, "resources", name)):
+        if os.path.exists(candidate):
+            return candidate
+    raise AssertionError(f"supplied file {name} not found at {_ROOT} or {os.path.join(_ROOT, 'resources')}")
 _PUBLIC_SMALL = ("i_658192e99b3806aff2", "i_299ba50f55c486ec71", "i_6421fda8c234f4ca23")
 _LIMIT_24 = 1.5
 
@@ -252,16 +260,14 @@ class OracleAgreementTest(unittest.TestCase):
             self.assertTrue(self._compare(FAMILIES[name](rng, n), f"{name} n={n}"))
 
     def test_public_small_instances(self):
-        path = next((c for c in (os.path.join(_ROOT, "benchmark_inputs.json"),
-                                 os.path.join(_ROOT, "resources", "benchmark_inputs.json")) if os.path.exists(c)), None)
-        self.assertIsNotNone(path, "benchmark_inputs.json not found")
+        path = _supplied("benchmark_inputs.json")
         with open(path, encoding="utf-8") as handle:
             instances = {inst["id"]: inst["request"] for inst in json.load(handle)["instances"]}
         for instance_id in _PUBLIC_SMALL:
             self.assertTrue(self._compare(instances[instance_id], instance_id))
 
     def test_sample_session(self):
-        with open(os.path.join(_ROOT, "resources", "director_session.json"), encoding="utf-8") as handle:
+        with open(_supplied("director_session.json"), encoding="utf-8") as handle:
             session = json.load(handle)
         request = session.get("request", session)
         self.assertTrue(self._compare(request, "director_session.json"))
