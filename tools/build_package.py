@@ -3,7 +3,8 @@
 Usage: python3.11 tools/build_package.py --out build/pkg [--source REPO] [--verify-results]
 
 The package mirrors the ZIP root: solver modules, ``tests/``, ``tools/``, the
-README, the recorder output when present, and byte copies of the three supplied
+README, the recorder output when present, the durable artifacts under
+``.claude-hve-tracking/`` when present, and byte copies of the three supplied
 files from ``resources/``. The build refuses to run when a supplied file no
 longer matches its recorded SHA-256. With ``--verify-results`` (the final build)
 the results file, the run log and the README are required and every packaged
@@ -34,6 +35,13 @@ RESOURCE_COPIES = ("benchmark_runner.py", "benchmark_inputs.json", "director_ses
 TREES = ("tests", "tools")
 OPTIONAL_ROOT_FILES = ("README.md", "benchmark_results.json", "benchmark_run.log")
 EXCLUDED_NAMES = {"__pycache__", ".DS_Store", "gate.log", ".git", ".claude", ".claude-hve-tracking"}
+# The tracking folder ships from the source root only, and only its durable artifacts.
+TRACKING_DIR = ".claude-hve-tracking"
+TRACKING_SUBDIRS = ("research", "plans", "details", "changes", "reviews", "challenges", "memory", "doc-ops")
+# Regenerable or tool-private folders, at any depth.
+TRACKING_EXCLUDED_DIRS = {"subagents", "sandbox", "gh-sync", "consults", "friction"}
+# No Python from the tracking folder: the recorder inventories every packaged ``*.py``.
+TRACKING_EXCLUDED_SUFFIXES = {".patch", ".py", ".pyc"}
 RESULTS_NAME = "benchmark_results.json"
 # Required in the package by --verify-results; optional in a pre-run staging build.
 REQUIRED_FINAL_FILES = (RESULTS_NAME, "benchmark_run.log", "README.md")
@@ -49,6 +57,13 @@ def sha256_file(path: Path) -> str:
 
 def _excluded(path: Path) -> bool:
     return path.suffix == ".pyc" or any(part in EXCLUDED_NAMES for part in path.parts)
+
+
+def _tracking_excluded(path: Path) -> bool:
+    """Whether ``path`` (relative to the tracking folder) must stay out of the package."""
+    if path.suffix in TRACKING_EXCLUDED_SUFFIXES:
+        return True
+    return any(part in EXCLUDED_NAMES or part in TRACKING_EXCLUDED_DIRS for part in path.parts)
 
 
 def check_resources(source: Path) -> None:
@@ -76,6 +91,14 @@ def planned_files(source: Path) -> dict[str, Path]:
             rel = path.relative_to(source)
             if path.is_file() and not _excluded(rel):
                 plan[rel.as_posix()] = path
+    tracking = source / TRACKING_DIR
+    for name in TRACKING_SUBDIRS:
+        root = tracking / name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and not _tracking_excluded(path.relative_to(tracking)):
+                plan[path.relative_to(source).as_posix()] = path
     for name in OPTIONAL_ROOT_FILES:
         if (source / name).is_file():
             plan[name] = source / name

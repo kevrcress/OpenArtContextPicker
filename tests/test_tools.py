@@ -63,7 +63,7 @@ def _make_source(root: Path) -> Path:
     (source / ".DS_Store").write_text("no\n")
     for rel in ("tests/test_a.py", "tests/data/case.json", "tools/t.py", "tests/__pycache__/a.cpython-311.pyc",
                 "tests/.DS_Store", "tests/gate.log", "tools/old.pyc", "docs/note.md", "build/pkg/x.py",
-                ".claude/settings.json", ".claude-hve-tracking/plans/p.md", "__pycache__/c.pyc"):
+                ".claude/settings.json", "__pycache__/c.pyc"):
         path = source / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x = 1\n")
@@ -108,6 +108,47 @@ class BuildPackageTests(unittest.TestCase):
         for name in build_package.RESOURCE_COPIES:
             self.assertEqual((self.out / name).read_bytes(), self.supplied_bytes[name], name)
             self.assertEqual(self.supplied_bytes[name], supplied(name).read_bytes(), name)
+
+    def _add_tracking(self, *rels: str) -> None:
+        for rel in rels:
+            path = self.source / ".claude-hve-tracking" / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x = 1\n")
+
+    def _tracked(self) -> set[str]:
+        prefix = ".claude-hve-tracking/"
+        return {name[len(prefix):] for name in self._packaged() if name.startswith(prefix)}
+
+    def test_durable_tracking_artifacts_are_copied(self) -> None:
+        durable = {f"{name}/2026-10-11/a.md" for name in build_package.TRACKING_SUBDIRS}
+        self.assertEqual(set(build_package.TRACKING_SUBDIRS), {
+            "research", "plans", "details", "changes", "reviews", "challenges", "memory", "doc-ops"})
+        self._add_tracking(*durable, "plans/logs/2026-10-11/a-log.md", "reviews/rpi/2026-10-11/r.md")
+        files = build_package.build(self.source, self.out)
+        self.assertEqual(self._tracked(), durable | {"plans/logs/2026-10-11/a-log.md", "reviews/rpi/2026-10-11/r.md"})
+        self.assertLessEqual({".claude-hve-tracking/" + rel for rel in durable}, set(files))
+        self.assertEqual((self.out / ".claude-hve-tracking/plans/2026-10-11/a.md").read_text(), "x = 1\n")
+
+    def test_regenerable_and_private_tracking_content_is_not_copied(self) -> None:
+        self._add_tracking(
+            "plans/p.md", "research/subagents/2026-10-11/raw.md", "subagents/s.md", "sandbox/run-1/s.md",
+            "gh-sync/state.json", "plans/gh-sync/state.json", "consults/c.md", "friction/f.md",
+            "reviews/pr/branch/diff.patch", "reviews/pr/branch/review.md", "changes/other.patch",
+            "changes/.DS_Store", "changes/__pycache__/x.md", "changes/gate.log", "top-level.md", "unknown/u.md")
+        build_package.build(self.source, self.out)
+        self.assertEqual(self._tracked(), {"plans/p.md", "reviews/pr/branch/review.md"})
+
+    def test_python_under_the_tracking_folder_is_not_copied(self) -> None:
+        self._add_tracking("plans/p.md", "plans/helper.py", "details/deep/tool.py", "changes/old.pyc")
+        self._write_results(self._recorded_sources())  # the inventory of a tree with no tracking folder
+        build_package.build(self.source, self.out, verify=True)
+        self.assertEqual(self._tracked(), {"plans/p.md"})
+        self.assertEqual([p for p in (self.out / ".claude-hve-tracking").rglob("*.py*")], [])
+
+    def test_build_without_a_tracking_folder_succeeds(self) -> None:
+        self.assertFalse((self.source / ".claude-hve-tracking").exists())
+        self.assertEqual(build_package.main(["--source", str(self.source), "--out", str(self.out)]), 0)
+        self.assertFalse((self.out / ".claude-hve-tracking").exists())
 
     def test_recorder_output_is_copied_when_present(self) -> None:
         (self.source / "benchmark_results.json").write_text("{}\n")
@@ -360,6 +401,21 @@ class MakeZipTests(unittest.TestCase):
         modes = {info.filename: (info.external_attr >> 16) & 0o777 for info in infos}
         self.assertEqual(modes["tools/run.sh"], 0o755)
         self.assertEqual(modes["context_solver.py"], 0o644)
+
+    def test_dot_directories_are_archived_and_gate_log_and_compiled_files_are_not(self) -> None:
+        for rel in (".claude-hve-tracking/plans/2026-10-11/a-plan.md", "gate.log", "tests/gate.log",
+                    ".claude-hve-tracking/changes/gate.log", "tools/old.pyc"):
+            path = self.pkg / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{rel}\n")
+        target = self.root / "a.zip"
+        self.assertEqual(make_zip.make_zip(self.pkg, target), 5)
+        with zipfile.ZipFile(target) as archive:
+            names = archive.namelist()
+            self.assertEqual(archive.read(".claude-hve-tracking/plans/2026-10-11/a-plan.md"),
+                             b".claude-hve-tracking/plans/2026-10-11/a-plan.md\n")
+        self.assertEqual(names, [".claude-hve-tracking/plans/2026-10-11/a-plan.md", "context_solver.py",
+                                 "tests/data/case.json", "tests/test_a.py", "tools/run.sh"])
 
     def test_archive_bytes_are_deterministic(self) -> None:
         first, second = self.root / "a.zip", self.root / "b.zip"
