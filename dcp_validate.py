@@ -30,6 +30,63 @@ _VERSION_KEYS = frozenset(("id", "parents"))
 _CARD_REQUIRED_KEYS = frozenset(("id", "version", "supersedes", "requires", "conflict_group", "tokens", "covers"))
 _CARD_ALL_KEYS = _CARD_REQUIRED_KEYS | {"text"}
 
+# Byte-count caps, checked on the raw bytes before decoding or parsing. Each cap is the largest count any valid
+# request can reach, derived from the limits above, so no valid request is rejected; input above a cap is
+# structurally impossible and is refused before the parser can build millions of objects from it.
+_MAX_IDENTIFIER_CHARS = 64  # the {1,64} repeat in _IDENTIFIER
+_MAX_MANDATORY = _MAX_CARDS  # mandatory holds distinct existing card ids
+_COUNT_MARGIN = 1024  # slack on top of every exact bound
+# A card text may consist entirely of one counted character (an in-text quote is written \" and still counts
+# once), so every cap allows 500 * 2,048 = 1,024,000 on top of the structural maximum.
+_TEXT_CHARS = _MAX_CARDS * _MAX_TEXT_CHARS
+# Commas separate the top-level members (6); the versions (95) and, per version, its keys (1) and parents (7);
+# the cards (499) and, per card, its keys (7), supersedes (7), requires (7) and covers (63); the features
+# (1,023); the mandatory ids (499); the pairs (9,999) and the two ids of each pair (10,000). Total 64,889.
+_STRUCTURAL_COMMAS = (
+    (len(_TOP_KEYS) - 1)
+    + (_MAX_VERSIONS - 1)
+    + _MAX_VERSIONS * ((len(_VERSION_KEYS) - 1) + (_MAX_PARENTS - 1))
+    + (_MAX_CARDS - 1)
+    + _MAX_CARDS * ((len(_CARD_ALL_KEYS) - 1) + 2 * (_MAX_CARD_REFS - 1) + (_MAX_COVERS - 1))
+    + (_MAX_FEATURES - 1)
+    + (_MAX_MANDATORY - 1)
+    + (_MAX_CONTRADICTIONS - 1)
+    + _MAX_CONTRADICTIONS
+)
+# Openers ("[" and "{"): the request (1); versions (1) plus an object and a parents array per version (192);
+# cards (1) plus an object and three arrays per card (2,000); features (1); mandatory (1); contradictions (1)
+# plus one array per pair (10,000). Total 12,198.
+_STRUCTURAL_OPENERS = 1 + (1 + 2 * _MAX_VERSIONS) + (1 + 4 * _MAX_CARDS) + 1 + 1 + (1 + _MAX_CONTRADICTIONS)
+# Object keys, one colon each: 7 top-level, 2 per version, 8 per card, one per feature. Total 5,223.
+_KEY_STRINGS = (
+    len(_TOP_KEYS) + _MAX_VERSIONS * len(_VERSION_KEYS) + _MAX_CARDS * len(_CARD_ALL_KEYS) + _MAX_FEATURES
+)
+# Identifier values: per version its id and parents (9); per card its id, version, conflict_group, supersedes,
+# requires and covers (83); head (1); mandatory (500); two per pair (20,000). Total 62,865.
+_IDENTIFIER_VALUES = (
+    _MAX_VERSIONS * (1 + _MAX_PARENTS)
+    + _MAX_CARDS * (3 + 2 * _MAX_CARD_REFS + _MAX_COVERS)
+    + 1
+    + _MAX_MANDATORY
+    + 2 * _MAX_CONTRADICTIONS
+)
+_MAX_COMMA_BYTES = _STRUCTURAL_COMMAS + _TEXT_CHARS + _COUNT_MARGIN  # 1,089,913
+_MAX_OPENER_BYTES = _STRUCTURAL_OPENERS + _TEXT_CHARS + _COUNT_MARGIN  # 1,037,222
+# Identifiers may contain colons: up to 64 in each identifier value and feature id (63,889 * 64 = 4,088,896).
+_MAX_COLON_BYTES = (
+    _KEY_STRINGS + (_IDENTIFIER_VALUES + _MAX_FEATURES) * _MAX_IDENTIFIER_CHARS + _TEXT_CHARS + _COUNT_MARGIN
+)  # 5,119,143
+# Two quotes delimit each string: the keys, the identifier values and one text per card (68,588 strings).
+_MAX_QUOTE_BYTES = 2 * (_KEY_STRINGS + _IDENTIFIER_VALUES + _MAX_CARDS) + _TEXT_CHARS + _COUNT_MARGIN  # 1,162,200
+# A text character is at most one counted byte, so commas, openers and quotes share one text allowance.
+_MAX_COMBINED_BYTES = (
+    _STRUCTURAL_COMMAS
+    + _STRUCTURAL_OPENERS
+    + 2 * (_KEY_STRINGS + _IDENTIFIER_VALUES + _MAX_CARDS)
+    + _TEXT_CHARS
+    + _COUNT_MARGIN
+)  # 1,239,287
+
 _IDENTIFIER = re.compile(r"[A-Za-z0-9._:\-]{1,64}")
 _JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
 _SURROGATE = re.compile("[\ud800-\udfff]")
@@ -105,9 +162,27 @@ def _check_refs(value: object, limit: int | None, known: set[str], what: str) ->
         raise InvalidRequest(f"{what} has an unknown reference")
 
 
+def _check_structure_counts(raw: bytes) -> None:
+    """Reject input holding more structural bytes than any valid request can, before it is decoded or parsed."""
+    commas = raw.count(b",")
+    if commas > _MAX_COMMA_BYTES:
+        raise InvalidRequest("input has more commas than any valid request")
+    openers = raw.count(b"[") + raw.count(b"{")
+    if openers > _MAX_OPENER_BYTES:
+        raise InvalidRequest("input has more arrays and objects than any valid request")
+    if raw.count(b":") > _MAX_COLON_BYTES:
+        raise InvalidRequest("input has more colons than any valid request")
+    quotes = raw.count(b'"')
+    if quotes > _MAX_QUOTE_BYTES:
+        raise InvalidRequest("input has more quotes than any valid request")
+    if commas + openers + quotes > _MAX_COMBINED_BYTES:
+        raise InvalidRequest("input has more structure than any valid request")
+
+
 def _parse(raw: bytes) -> dict:
     if len(raw) > MAX_BYTES:
         raise InvalidRequest("input exceeds 16 MiB")
+    _check_structure_counts(raw)
     text = raw.decode("utf-8", errors="strict")
     if text.startswith("﻿"):
         raise InvalidRequest("input must not start with a byte order mark")
