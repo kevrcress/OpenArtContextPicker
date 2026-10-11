@@ -25,6 +25,9 @@ All paths are relative to the archive root. Every command below is run from that
 | `benchmark_inputs.json` | The supplied public corpus (28 requests), unchanged |
 | `director_session.json` | The supplied sample session, unchanged |
 | `benchmark_results.json`, `benchmark_run.log` | Output of the recorded run, exactly as the recorder wrote it |
+| `.claude-hve-tracking/` | Research, plan, interface, change and review records from development. See "How this was built" |
+
+`.claude-hve-tracking/` documents how the work was done. It is not part of the runtime: nothing in `context_solver.py`, `dcp_*.py`, `tests/` or `tools/` reads it.
 
 ## Clean-extraction commands
 
@@ -235,6 +238,31 @@ The 2-vCPU envelope is met by the cgroup quota, not by the visible CPU count. No
 - Deadlines are fixed constants chosen for the 5 second limit in the measured container. On a much slower machine the margin between the 3.5 s deadline and the 5 s limit shrinks. The exact search reads the clock about once per 4,096 card visits and the local search once per move.
 - The certificate bound ignores requirements, groups, pairs and mandatory choices, as the contract defines it. It is provided only where those are absent.
 - The two `internal error` paths described under Fallback would answer `invalid` for a valid request.
+
+## How this was built
+
+The work followed HVE (Hypervelocity Engineering) for Claude Code, an adaptation of [microsoft/hve-core](https://github.com/microsoft/hve-core). The method separates four phases: Research, Plan, Implement, Review. Each phase writes a durable file, and the next phase reads that file from disk, not from chat. Each separation has a purpose. The research phase cannot write code, so it works toward verified facts. The plan fixes interfaces and file ownership before any code exists. The review validates the result against the plan.
+
+**Orchestration.** One Claude Code session acted as orchestrator. It split the plan into 11 phases with declared dependencies and owned files, and gave each phase to a separate agent (worker subagents and peer sessions), each in its own git worktree. It verified every delivery itself before the merge: it re-ran each test gate and cross-checked modules against an independent oracle. The orchestrator did not write product code.
+
+**Review.** Every implementation phase landed through its own pull request and was reviewed by a second model (OpenAI Codex) before the owner merged it. Each finding was triaged against the contract and either fixed or declined with the contract clause cited. Three examples, which can be checked in the tracking folder and the pull request history: the validation review led to rejecting lone surrogates in text and to a reasoned decline of rejecting `-0`; the harness review hardened the result-verification tooling; the pipeline review added a hard time guard.
+
+**Independent cross-checks.** The public corpus ships no expected outputs. Two things stand in for them: the legality checker and the brute-force oracle in `tests/`, which share no code with the solver, and 102 reference scenarios with expected answers written in a separate session (`tests/data/reference_scenarios.json`).
+
+**The tracking folder.** `.claude-hve-tracking/` holds the files the phases handed to each other. Paths in the table are relative to that folder.
+
+| Path | What it is |
+|---|---|
+| `research/2026-10-11/director-context-picker.md` | Verified findings: requirements matrix, recorder behavior, corpus census, ambiguities and their safest reading |
+| `plans/2026-10-11/director-context-picker-plan.md` | The 11 phases, their dependencies, the optional-capability decisions, and the requirements added during the work |
+| `plans/logs/2026-10-11/director-context-picker-log.md` | Planning discrepancies and design decisions, including the plan validator's findings |
+| `details/2026-10-11/director-context-picker-details.md` | The binding module interfaces the parallel phases coded against |
+| `changes/2026-10-11/director-context-picker-changes.md` | What each phase actually did, with test counts and deviations |
+| `reviews/rpi/2026-10-11/` | The review log and the per-phase validation reports |
+
+Start with the plan, then read the changes log. Citations of the form `file:line` are snapshots as of the date in the path and may be off by a few lines after later edits.
+
+The tracking files are working records written under a deadline. Where a later step proved an earlier statement wrong, the file carries a dated correction, not a silent rewrite.
 
 ## Operational note
 
