@@ -5,7 +5,9 @@ Usage: python3.11 tools/build_package.py --out build/pkg [--source REPO] [--veri
 The package mirrors the ZIP root: solver modules, ``tests/``, ``tools/``, the
 README, the recorder output when present, and byte copies of the three supplied
 files from ``resources/``. The build refuses to run when a supplied file no
-longer matches its recorded SHA-256.
+longer matches its recorded SHA-256. With ``--verify-results`` (the final build)
+the results file, the run log and the README are required and every packaged
+``*.py`` must match ``python_sources_after`` exactly.
 """
 
 from __future__ import annotations
@@ -27,6 +29,8 @@ TREES = ("tests", "tools")
 OPTIONAL_ROOT_FILES = ("README.md", "benchmark_results.json", "benchmark_run.log")
 EXCLUDED_NAMES = {"__pycache__", ".DS_Store", "gate.log", ".git", ".claude", ".claude-hve-tracking"}
 RESULTS_NAME = "benchmark_results.json"
+# Required in the package by --verify-results; optional in a pre-run staging build.
+REQUIRED_FINAL_FILES = (RESULTS_NAME, "benchmark_run.log", "README.md")
 
 
 class PackageError(Exception):
@@ -74,12 +78,23 @@ def planned_files(source: Path) -> dict[str, Path]:
     return plan
 
 
+def require_final_files(present) -> None:
+    """Raise ``PackageError`` unless every file the final package must carry is in ``present``."""
+    missing = [name for name in REQUIRED_FINAL_FILES if name not in present]
+    if missing:
+        raise PackageError("--verify-results needs these files in the package, missing: " + ", ".join(missing))
+
+
 def verify_results(out: Path) -> None:
-    """Raise unless the package's Python sources are exactly those recorded in the results file."""
+    """Raise unless the final deliverables exist and the Python sources are exactly those recorded."""
+    require_final_files({name for name in REQUIRED_FINAL_FILES if (out / name).is_file()})
     results_path = out / RESULTS_NAME
-    if not results_path.is_file():
-        return
-    recorded = json.loads(results_path.read_text(encoding="utf-8"))["python_sources_after"]
+    try:
+        recorded = json.loads(results_path.read_text(encoding="utf-8"))["python_sources_after"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise PackageError(f"{RESULTS_NAME} has no readable python_sources_after: {exc!r}") from exc
+    if not isinstance(recorded, dict):
+        raise PackageError(f"{RESULTS_NAME}: python_sources_after is not an object")
     actual = {}
     for path in sorted(out.rglob("*.py")):
         if "__pycache__" not in path.parts and path.is_file():
@@ -102,6 +117,8 @@ def build(source: Path, out: Path, *, verify: bool = False) -> list[str]:
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise PackageError(f"output directory is not empty: {out}")
     plan = planned_files(source)
+    if verify:
+        require_final_files(plan)  # fail before anything is copied
     for rel, src in plan.items():
         dest = out / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="repository root (default: the parent of tools/)")
     parser.add_argument("--verify-results", action="store_true",
-                        help="fail unless every packaged .py matches python_sources_after in benchmark_results.json")
+                        help="final build: require benchmark_results.json, benchmark_run.log and README.md, and fail "
+                             "unless every packaged .py matches python_sources_after")
     args = parser.parse_args(argv)
     try:
         files = build(args.source, args.out, verify=args.verify_results)
