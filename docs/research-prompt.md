@@ -1,10 +1,10 @@
 # Research Prompt: Director Context Picker
 
-Written 2026-10-11, before the supplied resources arrived. Everything about the resources below is a question, not a fact.
+Written 2026-10-11, before the supplied resources arrived. The resources have since landed in `resources/`. Read `docs/orchestrator-notes.md` first: it records what a direct read of them already established. For any question below that the notes answer, confirm it with one citation and move on. Spend the time on what the notes leave open.
 
 ## How to run
 
-Unpack the supplied resources into `resources/`, then run:
+Run:
 
 ```
 /hve-research director-context-picker: follow docs/research-prompt.md exactly --mode standard
@@ -32,8 +32,9 @@ Research what must be known to plan `context_solver.py`, a Python 3.11 standard-
 - `python3.11` is installed locally (3.11.15); default `python3` is 3.14.7 [HIGH]. Every command in later phases names `python3.11` explicitly.
 - `jq` is installed at `/opt/homebrew/bin/jq` [HIGH].
 - The repo is empty apart from `docs/` and `.gitignore` [HIGH]. There is no existing code to orient on.
-- The brief names five resource types: a sample session, product notes, a technical contract, test inputs, and a recording tool [HIGH that they are named; file names, formats and locations unknown].
-- The brief says "public corpus", which implies grading on inputs not supplied [MEDIUM].
+- The five supplied files are `resources/benchmark_inputs.json` (8.4 MB), `resources/benchmark_runner.py`, `resources/director_context_contract.md`, `resources/director_session.json` and `resources/director_usage_notes.md` [HIGH].
+- `resources/benchmark_inputs.json` is too large to Read. Only the parent's shell census can describe it [HIGH].
+- The contract grades against hidden comparison utilities, so the public corpus has no expected outputs [HIGH].
 
 ## Step 0: parent orientation pass
 
