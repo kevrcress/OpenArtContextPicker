@@ -161,5 +161,48 @@ class FallbackTest(unittest.TestCase):
         self.assertEqual(dcp_model.mask_tokens(p, mask), 0)
 
 
+def _planted_request(seed: int, n_cards: int = 200, n_planted: int = 60) -> dict:
+    """Unit-weight cards, one feature each; `n_planted` of them are conflict-free among themselves.
+
+    Every other card conflicts with 12 planted cards and about 16 other cards, which gives planted and
+    other cards the same expected degree: the planted set is larger than what the greedy rules find.
+    """
+    rng = random.Random(seed)
+    request = gen.random_request(rng, n_cards, p_requires=0.0, p_group=0.0, n_pairs=0, budget_ratio=0.5)
+    ids = [card["id"] for card in request["cards"]]
+    rng.shuffle(ids)
+    planted, rest = ids[:n_planted], ids[n_planted:]
+    request["features"] = {f"f_{k:04d}": 1 for k in range(n_cards)}
+    for k, card in enumerate(request["cards"]):
+        card["covers"] = [f"f_{k:04d}"]
+        card["tokens"] = 10
+    pairs = set()
+    for cid in rest:
+        for other in rng.sample(planted, 12) + rng.sample(rest, 8):
+            if other != cid:
+                pairs.add((min(cid, other), max(cid, other)))
+    request["contradictions"] = [list(pair) for pair in sorted(pairs)]
+    request["mandatory"] = []
+    request["budget"] = 10 * n_planted
+    return request
+
+
+class PlantedSetTest(unittest.TestCase):
+    def test_given_a_planted_conflict_free_set_when_solved_then_every_seed_reaches_it(self):
+        request = _planted_request(6006)
+        p = dcp_model.build_problem(request)
+        for seed in (1, 2, 3, 4, 5):
+            mask = dcp_search.solve_large(p, time.perf_counter() + 30.0, seed, max_moves=40000)
+            self.assertTrue(dcp_model.is_legal(p, mask), f"seed {seed}")
+            self.assertEqual(_utility(p, mask), 60, f"seed {seed}")
+
+    def test_given_the_same_seed_and_move_limit_when_solved_twice_then_the_set_is_identical(self):
+        p = dcp_model.build_problem(_planted_request(6007))
+        far = time.perf_counter() + 30.0
+        first = dcp_search.solve_large(p, far, 5, max_moves=3000)
+        self.assertEqual(dcp_search.solve_large(p, far, 5, max_moves=3000), first)
+        self.assertTrue(dcp_model.is_legal(p, dcp_search.solve_large(p, time.perf_counter() + 0.05, max_moves=None)))
+
+
 if __name__ == "__main__":
     unittest.main()
