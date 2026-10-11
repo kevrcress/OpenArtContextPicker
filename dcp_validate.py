@@ -32,6 +32,7 @@ _CARD_ALL_KEYS = _CARD_REQUIRED_KEYS | {"text"}
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9._:\-]{1,64}")
 _JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 class InvalidRequest(Exception):
@@ -216,6 +217,8 @@ def _check_cards(cards: object, version_index: dict[str, int], ancestors: list[i
                 raise InvalidRequest("card text must be a string")
             if len(text) > _MAX_TEXT_CHARS:
                 raise InvalidRequest("card text is too long")
+            if _SURROGATE.search(text):
+                raise InvalidRequest("card text contains a lone surrogate")
     card_ids = set(card_version)
     for card in cards:
         _check_refs(card["requires"], _MAX_CARD_REFS, card_ids, "card requires")

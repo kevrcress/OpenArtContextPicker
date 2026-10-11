@@ -230,3 +230,14 @@ Owner's words: "pause before building the zip so i can review -- we want to reso
 
 - Phase 11 does not start step 11.2 (package and ZIP build) until the owner says to. Before that point the orchestrator reports: every open PR and its review state, every unresolved Codex and HVE review finding with severity, and the recorded-run results. Critical and Major findings are resolved before the checkpoint where time allows; Minor ones may ship and are listed.
 - The Phase 9 recorded run may happen before the checkpoint; if rework after it changes any `.py`, Phase 9 is repeated before the ZIP.
+
+### 2026-10-11 13:04 PDT — reference scenarios: owner's instructions in full
+
+The owner pasted the note that accompanies `docs/reference-scenarios/` (102 scenarios: 38 ok, 8 infeasible, 56 invalid; schema `reference-scenarios/1`). It refines the 13:00 entry above; where they differ, this entry wins.
+
+- `docs/reference-scenarios/` is committed to `main` as it stands (source of truth; never edited by this workflow).
+- Phase 8 (issue #9) owns the test: `tests/test_reference_scenarios.py` runs `context_solver.py` as a subprocess on every scenario, feeding `raw_stdin` verbatim when present, otherwise `request` serialized as JSON. Assertions: exit code 0 and exactly one JSON object on stdout; status equals `expect.status`; for `ok`, utility equals `expect.utility`, the selection passes `tests/checker.py`, `tokens` and `covered` match a recomputation from `selected`, and where `optimal_selections` is present `selected` is one of them.
+- The scenarios ship in the ZIP as a copy, `tests/data/reference_scenarios.json`, so the README's regression command exercises them after a clean extraction. A test asserts the copy is byte-identical to `docs/reference-scenarios/scenarios.json` when the latter exists (repo), and is skipped only for that comparison in the package.
+- The full regression, including this test, runs as a gate (`<cmd> > gate.log 2>&1; echo rc=$?`) before the recorded benchmark run (step 9.1).
+- They are a cross-check. The project's own oracle and checker stay; `build_scenarios.py` is not imported by any test. If the solver and a scenario disagree, the contract clause is read first, and a scenario judged wrong is reported to the owner by id with the reason; no expected answer is edited.
+- Not covered by them and still owed by the project's own tests: 250 to 500 card instances, exactness at 19 to 24 active cards, invalid UTF-8, the 16 MiB limit, the certificate.
