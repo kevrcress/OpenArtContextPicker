@@ -1,0 +1,16 @@
+{
+  "task_slug": "director-context-picker",
+  "repo": "kevrcress/OpenArtContextPicker",
+  "milestone": { "number": 1, "title": "director-context-picker" },
+  "parent_issue": { "number": 1, "db_id": 5804493990 },
+  "phases": [],
+  "sync_moments_completed": ["research"],
+  "last_sync": "2026-10-11T19:40:14Z",
+  "project": {
+    "number": 5,
+    "owner": "kevrcress",
+    "owner_type": "User",
+    "project_id": "PVT_kwHOABptxM4BmmZk",
+    "url": "https://github.com/users/kevrcress/projects/5"
+  }
+}
