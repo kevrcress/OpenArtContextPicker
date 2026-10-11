@@ -5,6 +5,7 @@
 totals, so one move costs a few dozen list operations instead of a recomputation.
 """
 
+import math
 import random
 import time
 
@@ -13,10 +14,10 @@ from dcp_model import is_legal
 DEFAULT_SEED = 20261011
 CLOCK_EVERY = 1           # loop iterations between clock checks (a closure-heavy move can take over 1 ms)
 DROP_SAMPLE = 8           # selected cards sampled when a move has to shed tokens
-STALE_MIN = 120           # lower bound on moves without improvement before a perturbation
-STALE_MAX = 600
-PERTURB_MIN = 2
-PERTURB_MAX = 5
+ROUND_MOVES = 40000       # moves in one annealing round; a round restarts from the best set seen
+T_HOT = 0.5               # start and end temperature of a round, in units of the mean utility per card
+T_COLD = 0.03
+LAMBDA = 0.25             # token price, as a fraction of the greedy set's utility per token
 
 # Filled by the last call; read by tools/tune_search.py. Not part of the solver contract.
 LAST_STATS = {"moves": 0, "perturbations": 0, "greedy_utility": 0}
@@ -211,150 +212,131 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
     if not n_us or not p.usable & ~S:
         return
 
-    stale_limit = min(STALE_MAX, max(STALE_MIN, n_us))
-    stale = 0
+    # Simulated annealing over legal sets. One move inserts a random card with its closure, evicts
+    # what conflicts with it (and what depends on the evicted cards) and sheds tokens when the budget
+    # is exceeded. The energy is utility minus a small token price, so that at equal utility the
+    # leaner set wins and room for further cards opens up. Rounds restart from the best set seen.
+    best_util = util
+    best_toks = toks
+    best_mask = S
+    unit = util / max(1, len(sel)) if util else 1.0
+    lam = LAMBDA * util / toks if toks and util else 0.0
+    t_hot = T_HOT * unit
+    cool = (T_COLD / T_HOT) ** (1.0 / ROUND_MOVES)
+    temp = t_hot
+    exp = math.exp
     moves = 0
-    perturbations = 0
+    rounds = 0
+    k = 0
     try:
-        # Portfolio: a slice from the per-token greedy, a slice from the per-blocked-card greedy, then
-        # the rest of the time from the best set seen, with the refill rule that found it.
-        for phase in range(3):
-            if phase == 0:
-                start_mask, ls_mode, frac = starts[0], 0, 0.25
-            elif phase == 1:
-                start_mask, ls_mode, frac = starts[2], 2, 0.5
-            else:
-                start_mask, ls_mode, frac = g_mask, g_mode, 1.0
-            load(start_mask)
-            best_util = util
-            best_mask = S
-            stale = 0
-            phase_deadline = deadline if phase == 2 else t_start + (deadline - t_start) * frac
-            phase_moves = int(max_moves * frac) if max_moves else 0
-            while True:
-                moves += 1
-                if not moves % CLOCK_EVERY and clock() >= phase_deadline:
-                    break
-                if phase_moves and moves >= phase_moves:
-                    break
-                if stale > stale_limit:
-                    # Perturbation: restart from the best set when the walk has fallen behind, then
-                    # remove a few random units and refill without them.
-                    stale = 0
-                    perturbations += 1
-                    if util < best_util:
-                        load(best_mask)
-                    banned = 0
-                    for _ in range(PERTURB_MIN + int(rnd() * (PERTURB_MAX - PERTURB_MIN + 1))):
-                        if not sel:
-                            break
-                        j = sel[int(rnd() * len(sel))]
-                        group = dependents[j] & S
-                        if group & mandatory:
-                            continue
-                        banned |= group
-                        for k in _bits(group):
-                            drop(k)
-                    journal.clear()
-                    refill(banned, ls_mode)
-                    refill(0, ls_mode)
-                    if util > best_util:
-                        best_util = util
-                        best_mask = S
-                        if util > g_util:
-                            g_util, g_mask, g_mode = util, S, ls_mode
-                            result[0] = S
-                    continue
-
-                c = usable[int(rnd() * n_us)]
-                if in_s[c]:
-                    continue
-                target = closure[c]
-                evict = ccf[c] & S
-                if evict:
-                    if evict & mandatory:
-                        continue
-                    todo = evict
-                    while todo:
-                        low = todo & -todo
-                        todo ^= low
-                        more = dependents[low.bit_length() - 1] & S & ~evict
-                        if more:
-                            evict |= more
-                            todo |= more
-                    if evict & mandatory or evict & target:
-                        continue
-                old_util = util
-                journal.clear()
-                if evict:
-                    for j in _bits(evict):
-                        journal.append(~j)
-                        drop(j)
-                for j in clos[c]:
-                    if not in_s[j]:
-                        journal.append(j)
-                        add(j)
-
-                ok = True
-                protect = target | mandatory
-                while toks > budget:
-                    # Shed the sampled unit with the least lost weight per freed token.
-                    worst = 0
-                    worst_l = 0
-                    worst_t = 0
-                    n_sel = len(sel)
-                    for _ in range(DROP_SAMPLE):
-                        j = sel[int(rnd() * n_sel)]
-                        group = dependents[j] & S
-                        if group & protect:
-                            continue
-                        if group == bit[j]:
-                            t = tok[j]
-                            lost = 0
-                            for f in cov[j]:
-                                if cnt[f] == 1:
-                                    lost += weights[f]
-                        else:
-                            t = 0
-                            lost = 0
-                            for k in _bits(group):
-                                t += tok[k]
-                                for f in cov[k]:
-                                    if cnt[f] == 1:
-                                        lost += weights[f]
-                        if t <= 0:
-                            continue
-                        if not worst or lost * worst_t < worst_l * t:
-                            worst, worst_l, worst_t = group, lost, t
-                    if not worst:
-                        ok = False
-                        break
-                    for k in _bits(worst):
-                        journal.append(~k)
-                        drop(k)
-                if ok:
-                    refill(0, ls_mode)
-                if ok and util >= old_util:
-                    if util > old_util:
-                        stale = 0
-                    else:
-                        stale += 1
-                    if util > best_util:
-                        best_util = util
-                        best_mask = S
-                        if util > g_util:
-                            g_util, g_mask, g_mode = util, S, ls_mode
-                            result[0] = S
-                else:
-                    stale += 1
-                    while journal:
-                        x = journal.pop()
-                        if x >= 0:
-                            drop(x)
-                        else:
-                            add(~x)
+        while True:
+            moves += 1
             if clock() >= deadline:
                 break
+            if max_moves and moves >= max_moves:
+                break
+            k += 1
+            if k >= ROUND_MOVES:
+                k = 0
+                rounds += 1
+                temp = t_hot
+                load(best_mask)
+                journal.clear()
+                refill(0, 0)
+                if util > best_util:
+                    best_util, best_toks, best_mask = util, toks, S
+                    result[0] = S
+            else:
+                temp *= cool
+
+            c = usable[int(rnd() * n_us)]
+            if in_s[c]:
+                continue
+            target = closure[c]
+            evict = ccf[c] & S
+            if evict:
+                if evict & mandatory:
+                    continue
+                todo = evict
+                while todo:
+                    low = todo & -todo
+                    todo ^= low
+                    more = dependents[low.bit_length() - 1] & S & ~evict
+                    if more:
+                        evict |= more
+                        todo |= more
+                if evict & mandatory or evict & target:
+                    continue
+            old_util = util
+            old_toks = toks
+            journal.clear()
+            if evict:
+                for j in _bits(evict):
+                    journal.append(~j)
+                    drop(j)
+            for j in clos[c]:
+                if not in_s[j]:
+                    journal.append(j)
+                    add(j)
+
+            ok = True
+            protect = target | mandatory
+            while toks > budget:
+                # Shed the sampled unit with the least lost weight per freed token.
+                worst = 0
+                worst_l = 0
+                worst_t = 0
+                n_sel = len(sel)
+                for _ in range(DROP_SAMPLE):
+                    j = sel[int(rnd() * n_sel)]
+                    group = dependents[j] & S
+                    if group & protect:
+                        continue
+                    if group == bit[j]:
+                        t = tok[j]
+                        lost = 0
+                        for f in cov[j]:
+                            if cnt[f] == 1:
+                                lost += weights[f]
+                    else:
+                        t = 0
+                        lost = 0
+                        for x in _bits(group):
+                            t += tok[x]
+                            for f in cov[x]:
+                                if cnt[f] == 1:
+                                    lost += weights[f]
+                    if t <= 0:
+                        continue
+                    if not worst or lost * worst_t < worst_l * t:
+                        worst, worst_l, worst_t = group, lost, t
+                if not worst:
+                    ok = False
+                    break
+                for x in _bits(worst):
+                    journal.append(~x)
+                    drop(x)
+            if ok:
+                delta = util - old_util - lam * (toks - old_toks)
+                if delta < 0 and (delta < -30.0 * temp or rnd() >= exp(delta / temp)):
+                    ok = False
+            if ok:
+                if util > best_util or (util == best_util and toks < best_toks):
+                    best_util, best_toks, best_mask = util, toks, S
+                    result[0] = S
+            else:
+                while journal:
+                    x = journal.pop()
+                    if x >= 0:
+                        drop(x)
+                    else:
+                        add(~x)
+        if clock() < deadline:
+            load(best_mask)
+            journal.clear()
+            refill(0, 0)
+            if util > best_util:
+                result[0] = S
     finally:
         LAST_STATS["moves"] = moves
-        LAST_STATS["perturbations"] = perturbations
+        LAST_STATS["perturbations"] = rounds
