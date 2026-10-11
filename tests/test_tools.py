@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import shutil
 import tempfile
@@ -107,6 +109,7 @@ class BuildPackageTests(unittest.TestCase):
 
     def _write_results(self, sources: dict) -> None:
         (self.source / "benchmark_results.json").write_text(json.dumps({"python_sources_after": sources}))
+        (self.source / "benchmark_run.log").write_text("rc=0\n")
 
     def _recorded_sources(self) -> dict:
         names = ["context_solver.py", "dcp_model.py", "tests/test_a.py", "tools/t.py"]
@@ -134,6 +137,59 @@ class BuildPackageTests(unittest.TestCase):
     def test_without_flag_results_are_not_verified(self) -> None:
         self._write_results({})
         self.assertEqual(build_package.main(["--source", str(self.source), "--out", str(self.out)]), 0)
+
+    def test_verify_results_requires_results_log_and_readme(self) -> None:
+        self.assertEqual(set(build_package.REQUIRED_FINAL_FILES),
+                         {"benchmark_results.json", "benchmark_run.log", "README.md"})
+        for name in build_package.REQUIRED_FINAL_FILES:
+            with self.subTest(missing=name):
+                source = _make_source(self.root / f"no_{name}")
+                (source / "benchmark_results.json").write_text(
+                    json.dumps({"python_sources_after": self._recorded_sources()}))
+                (source / "benchmark_run.log").write_text("rc=0\n")
+                (source / name).unlink()
+                out = self.root / f"no_{name}" / "out"
+                with self.assertRaisesRegex(build_package.PackageError, name.replace(".", r"\.")):
+                    build_package.build(source, out, verify=True)
+                self.assertFalse(out.exists(), "nothing is copied when a required file is missing")
+                args = ["--source", str(source), "--out", str(out), "--verify-results"]
+                with contextlib.redirect_stderr(io.StringIO()) as text:
+                    self.assertEqual(build_package.main(args), 1)
+                self.assertIn(name, text.getvalue())
+                # verify_results itself refuses a package directory that lacks the file.
+                build_package.build(source, out)
+                with self.assertRaisesRegex(build_package.PackageError, name.replace(".", r"\.")):
+                    build_package.verify_results(out)
+
+    def test_without_flag_the_three_final_files_stay_optional(self) -> None:
+        (self.source / "README.md").unlink()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(build_package.main(["--source", str(self.source), "--out", str(self.out)]), 0)
+        self.assertFalse({"README.md", "benchmark_results.json", "benchmark_run.log"} & self._packaged())
+
+    def test_verify_results_rejects_unreadable_inventory(self) -> None:
+        for label, text in (("no key", "{}"), ("not json", "{"), ("not an object", '{"python_sources_after": []}')):
+            with self.subTest(label=label):
+                source = _make_source(self.root / label.replace(" ", "_"))
+                (source / "benchmark_results.json").write_text(text)
+                (source / "benchmark_run.log").write_text("rc=0\n")
+                with self.assertRaises(build_package.PackageError):
+                    build_package.build(source, self.root / label.replace(" ", "_") / "out", verify=True)
+
+
+class RunRecordedScriptTests(unittest.TestCase):
+    def test_docker_command_exits_with_the_recorder_status(self) -> None:
+        text = (REPO / "tools" / "run_recorded.sh").read_text(encoding="utf-8")
+        lines = [line for line in text.splitlines() if line.startswith("readonly RECORD_CMD=")]
+        self.assertEqual(len(lines), 1)
+        command = lines[0].split("=", 1)[1]
+        self.assertTrue(command.startswith("'python benchmark_runner.py ") and command.endswith("'"), command)
+        self.assertTrue(command.endswith('> benchmark_run.log 2>&1; rc=$?; echo "rc=$rc"; exit "$rc"\''), command)
+        self.assertEqual(command.count(">"), 2, "only the recorder's own streams go to the log")
+        # The outer script keeps the status past errexit and exits with it.
+        self.assertIn('sh -c "${RECORD_CMD}" || rc=$?', text)
+        self.assertIn('exit "${rc}"', text)
+        self.assertIn("set -euo pipefail", text)
 
 
 class MakeZipTests(unittest.TestCase):
@@ -187,9 +243,13 @@ class CheckResultsTests(unittest.TestCase):
         cls.invalid_id = "i_93a288225d57a93686"
         cls.infeasible_id = "i_6bf2ce5fc66d4bad9e"
         cls.corpus = {"schema": full["schema"], "instances": [by_id[cls.invalid_id], by_id[cls.infeasible_id]]}
+        cls.by_id = by_id
+        cls.feasible_id = "i_353b0868e8bfb0bb1c"  # valid, feasible, not a certificate profile
+        cls.profile_id = "i_9e24f6f61fea4413ac"  # valid, feasible, certificate profile
 
     def _record(self, rid: str, response: dict, **overrides) -> dict:
-        request = next(i["request"] for i in self.corpus["instances"] if i["id"] == rid)
+        """One record with exactly the keys the recorder writes (meter output, id, hash, response)."""
+        request = self.by_id[rid]["request"]
         record = {"stdout": json.dumps(response) + "\n", "stderr": "", "exit_code": 0, "wall_ms": 40.2,
                   "peak_rss_kib": 9000, "timed_out": False, "id": rid,
                   "input_sha256": check_results.canonical_sha256(request), "response": response,
@@ -197,12 +257,37 @@ class CheckResultsTests(unittest.TestCase):
         record.update(overrides)
         return record
 
+    def _sources(self) -> dict:
+        return {"benchmark_runner.py": check_results.RUNNER_SHA256, "context_solver.py": "a" * 64,
+                "dcp_model.py": "b" * 64, "tests/checker.py": "c" * 64}
+
     def _results(self, records: list, **overrides) -> dict:
-        results = {"runner_sha256": check_results.RUNNER_SHA256, "inputs_sha256": check_results.INPUTS_SHA256,
-                   "python_sources_unchanged": True,
-                   "environment": {"cpu_capacity": {"quota_vcpus": 2.0}}, "instances": records}
+        """The document shape ``resources/benchmark_runner.py`` writes, key for key."""
+        results = {
+            "schema": "openart-context-observations/2", "inputs_sha256": check_results.INPUTS_SHA256,
+            "python_sources_before": self._sources(), "python_sources_after": self._sources(),
+            "python_sources_unchanged": True, "runner_sha256": check_results.RUNNER_SHA256,
+            "entrypoint_sha256": "a" * 64,
+            "environment": {
+                "python": "3.11.9 (main) [GCC 12.2.0]", "executable": "/usr/local/bin/python",
+                "platform": "Linux-6.10-aarch64-with-glibc2.36", "logical_cpus": 8,
+                "cpu_capacity": {"logical_cpus": 8, "affinity_cpus": [0, 1, 2, 3, 4, 5, 6, 7],
+                                 "cgroup_cpu_max": "200000 100000", "quota_vcpus": 2.0},
+                "rss_units": "KiB", "wall_limit_seconds": 5.0,
+                "invocation": "benchmark_runner.py --solution context_solver.py --inputs benchmark_inputs.json"
+                              " --output benchmark_results.json"},
+            "instances": records}
         results.update(overrides)
         return results
+
+    def _ok_response(self, rid: str) -> dict:
+        request = self.by_id[rid]["request"]
+        return self.checker.response_for(request, self.checker.requires_closure(request, request["mandatory"]))
+
+    def _evaluate_one(self, rid: str, response: dict) -> dict:
+        corpus = {"schema": self.corpus["schema"], "instances": [self.by_id[rid]]}
+        return check_results.evaluate(self._results([self._record(rid, response)]), corpus, self.checker,
+                                      expected_records=1)
 
     def _good_records(self) -> list:
         return [self._record(self.invalid_id, {"status": "invalid", "reason": "bad"}),
@@ -217,6 +302,143 @@ class CheckResultsTests(unittest.TestCase):
         self.assertEqual(summary["status_counts"], {"invalid": 1, "infeasible": 1})
         self.assertEqual([r["verdict"] for r in summary["rows"]], ["pass", "pass"])
         self.assertIn("RESULT: PASS", check_results.render(summary))
+        self.assertEqual([c["check"] for c in summary["integrity"] if not c["ok"]], [])
+
+    def test_fixture_has_the_recorder_document_keys(self) -> None:
+        results = self._results(self._good_records())
+        self.assertEqual(list(results), ["schema", "inputs_sha256", "python_sources_before", "python_sources_after",
+                                         "python_sources_unchanged", "runner_sha256", "entrypoint_sha256",
+                                         "environment", "instances"])
+        self.assertEqual(list(results["environment"]), ["python", "executable", "platform", "logical_cpus",
+                                                        "cpu_capacity", "rss_units", "wall_limit_seconds",
+                                                        "invocation"])
+        self.assertEqual(set(results["instances"][0]), {"stdout", "stderr", "exit_code", "wall_ms", "peak_rss_kib",
+                                                        "timed_out", "id", "input_sha256", "response",
+                                                        "response_parse_error"})
+        recorder = (RESOURCES / "benchmark_runner.py").read_text(encoding="utf-8")
+        for key in list(results) + list(results["environment"]) + list(results["instances"][0]):
+            self.assertIn(f'"{key}"' if key not in ("id", "input_sha256") else f"{key}=", recorder, key)
+
+    def test_stdout_and_stored_response_must_agree(self) -> None:
+        good = {"status": "invalid", "reason": "bad"}
+        wrong_stdout = json.dumps({"status": "infeasible", "reason": "bad"}) + "\n"
+        cases = {
+            "good response, wrong stdout": self._record(self.invalid_id, good, stdout=wrong_stdout),
+            "wrong response, good stdout": dict(self._record(self.invalid_id, good),
+                                                response={"status": "invalid", "reason": "other"}),
+            "response dropped": dict(self._record(self.invalid_id, good), response=None),
+            "non-finite constant": dict(self._record(self.invalid_id, good),
+                                        stdout='{"status":"invalid","reason":NaN}\n',
+                                        response={"status": "invalid", "reason": float("nan")}),
+        }
+        for label, record in cases.items():
+            with self.subTest(label=label):
+                summary = self._evaluate(self._results([record, self._good_records()[1]]))
+                self.assertFalse(summary["passed"])
+                self.assertEqual(summary["failed_ids"], [self.invalid_id])
+        row = self._evaluate(self._results([cases["good response, wrong stdout"], self._good_records()[1]]))["rows"][0]
+        self.assertEqual(row["status"], "infeasible", "the row reports what stdout said")
+        self.assertIn("stored response differs from the object parsed from stdout", row["problems"])
+
+    def test_parse_stdout_matches_the_recorder(self) -> None:
+        self.assertEqual(check_results.parse_stdout('{"a": 1}\n'), ({"a": 1}, None))
+        for bad in ('{"a": NaN}\n', '{"a": Infinity}\n', '{"a": -Infinity}\n', "{", "", None, b"{}"):
+            with self.subTest(bad=bad):
+                value, error = check_results.parse_stdout(bad)
+                self.assertIsNone(value)
+                self.assertTrue(error)
+        self.assertTrue(check_results.same_json({"a": [1, "x"]}, {"a": [1, "x"]}))
+        for first, second in ((1, 1.0), (1, True), ({"a": 1}, {"a": 2}), (None, {})):
+            self.assertFalse(check_results.same_json(first, second))
+
+    def test_schema_inventories_and_entrypoint_hash_are_required(self) -> None:
+        def drop(key):
+            return lambda r: r.pop(key)
+
+        def put(key, value):
+            return lambda r: r.__setitem__(key, value)
+
+        def put_in(key, name, value):
+            return lambda r: r[key].__setitem__(name, value)
+
+        cases = {
+            "missing schema": drop("schema"),
+            "wrong schema": put("schema", "openart-context-observations/1"),
+            "missing before inventory": drop("python_sources_before"),
+            "missing after inventory": drop("python_sources_after"),
+            "inventory is not an object": put("python_sources_after", ["context_solver.py"]),
+            "file only in before": put_in("python_sources_before", "dcp_extra.py", "d" * 64),
+            "file only in after": put_in("python_sources_after", "dcp_extra.py", "d" * 64),
+            "hash changed during the run": put_in("python_sources_after", "dcp_model.py", "d" * 64),
+            "unchanged flag missing": drop("python_sources_unchanged"),
+            "unchanged flag is not a boolean": put("python_sources_unchanged", 1),
+            "missing entry-point hash": drop("entrypoint_sha256"),
+            "wrong entry-point hash": put("entrypoint_sha256", "e" * 64),
+            "entry point not in the inventory": lambda r: [r[k].pop("context_solver.py") for k in
+                                                           ("python_sources_before", "python_sources_after")],
+            "recorder beside the solver differs": lambda r: [r[k].__setitem__("benchmark_runner.py", "f" * 64)
+                                                             for k in ("python_sources_before", "python_sources_after")],
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label=label):
+                results = self._results(self._good_records())
+                mutate(results)
+                summary = self._evaluate(results)
+                self.assertFalse(summary["passed"])
+                self.assertEqual(summary["failed_ids"], [], "an integrity failure, not a record failure")
+                self.assertIn("RESULT: FAIL", check_results.render(summary))
+        results = self._results(self._good_records())
+        for key in ("python_sources_before", "python_sources_after"):
+            results[key].pop("benchmark_runner.py")
+        self.assertTrue(self._evaluate(results)["passed"], "recorder kept outside the solver directory")
+
+    def test_malformed_certificate_does_not_fail_the_core_verdict(self) -> None:
+        legal = self._ok_response(self.feasible_id)
+        self.assertTrue(self._evaluate_one(self.feasible_id, legal)["passed"])
+        for label, certificate in (("empty", {}), ("not an object", 7),
+                                   ("bad scale", {"scale": 0, "budget_price": 0, "feature_prices": {}})):
+            with self.subTest(label=label):
+                summary = self._evaluate_one(self.feasible_id, dict(legal, certificate=certificate))
+                self.assertTrue(summary["passed"], summary["rows"][0]["problems"])
+                self.assertEqual(summary["failed_ids"], [])
+                row = summary["rows"][0]
+                self.assertEqual((row["verdict"], row["problems"]), ("pass", []))
+                self.assertTrue(row["certificate_errors"])
+                self.assertTrue(all(e.startswith("certificate:") for e in row["certificate_errors"]))
+                self.assertFalse(summary["certificate_capability"]["passed"])
+                text = check_results.render(summary)
+                self.assertIn("RESULT: PASS (0 of 1 records failed, 0 integrity checks failed)", text)
+                self.assertIn("## Optional certificate capability", text)
+                self.assertIn("CERTIFICATE CAPABILITY: FAIL", text)
+                self.assertIn("certificate:", text.split("## Optional certificate capability")[1])
+                self.assertNotIn("certificate:", text.split("## Optional certificate capability")[0])
+
+    def test_core_errors_still_fail_beside_a_malformed_certificate(self) -> None:
+        wrong = dict(self._ok_response(self.feasible_id), certificate={})
+        wrong["tokens"] += 1
+        summary = self._evaluate_one(self.feasible_id, wrong)
+        self.assertFalse(summary["passed"])
+        self.assertEqual(summary["failed_ids"], [self.feasible_id])
+
+    def test_certificate_gap_is_reported_without_touching_the_core_verdict(self) -> None:
+        request = self.by_id[self.profile_id]["request"]
+        legal = self._ok_response(self.profile_id)
+        zero = {"scale": 1, "budget_price": 0, "feature_prices": {fid: 0 for fid in request["features"]}}
+        bound, scale = self.checker.certificate_bound(request, zero)
+        self.assertGreater(100 * bound, 105 * legal["utility"] * scale, "the zero-price bound is loose here")
+        summary = self._evaluate_one(self.profile_id, dict(legal, certificate=zero))
+        self.assertTrue(summary["passed"], summary["rows"][0]["problems"])
+        self.assertEqual(summary["certificates"], [{"id": self.profile_id, "U": bound, "s": scale,
+                                                    "utility": legal["utility"], "within_5_percent": False}])
+        self.assertFalse(summary["certificate_capability"]["passed"])
+        text = check_results.render(summary)
+        self.assertIn(f"- certificate {self.profile_id}: U={bound}, s={scale}", text)
+        self.assertIn("CERTIFICATE CAPABILITY: FAIL", text)
+        self.assertIn("CONSISTENCY CAPABILITY: FAIL", text)
+        self.assertIn("RESULT: PASS", text)
+        missing = self._evaluate_one(self.profile_id, legal)
+        self.assertTrue(missing["passed"])
+        self.assertFalse(missing["certificate_capability"]["passed"], "no certificate on a profile instance")
 
     def test_wrong_status_fails(self) -> None:
         records = [self._record(self.invalid_id, {"status": "infeasible", "reason": "x"}),
@@ -266,8 +488,6 @@ class CheckResultsTests(unittest.TestCase):
             results = self._results(self._good_records())
             (run_dir / "benchmark_results.json").write_text(json.dumps(results), encoding="utf-8")
             out = run_dir / "summary.json"
-            import contextlib
-            import io
             with contextlib.redirect_stdout(io.StringIO()) as text, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(check_results.main([str(run_dir), "--json", str(out)]), 1)
                 self.assertEqual(check_results.main([str(run_dir), "--allow-wrong"]), 0)

@@ -522,6 +522,17 @@ class GeneratorTests(unittest.TestCase):
         self.assertLessEqual(max(len(c["covers"]) for c in request["cards"]), 64)
         self.assertLessEqual(max(c["tokens"] for c in request["cards"]), 512)
 
+    def test_random_request_clamps_the_budget_for_huge_finite_ratios(self):
+        for ratio in (1e308, 1e30, 8193.0):
+            with self.subTest(budget_ratio=ratio):
+                request = gen.random_request(random.Random(0), 1, budget_ratio=ratio)
+                assert_valid_request(self, request)
+                self.assertEqual(request["budget"], 8192)
+        for ratio in (float("nan"), float("inf"), -1.0):
+            with self.subTest(budget_ratio=ratio):
+                with self.assertRaisesRegex(ValueError, "budget_ratio"):
+                    gen.random_request(random.Random(0), 1, budget_ratio=ratio)
+
     def test_random_request_caps_pairs_at_the_distinct_pairs_available(self):
         request = gen.random_request(random.Random(0), 4, p_requires=0.0, p_group=0.0, n_pairs=10_000)
         assert_valid_request(self, request)
