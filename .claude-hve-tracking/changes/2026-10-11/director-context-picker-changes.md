@@ -12,17 +12,39 @@ Tests: N/A — no test runner or test file exists in the repo before Phase 1 (0 
 ## Phases
 
 ### Phase 1: Strict input validation
-Status: Pending
-Started: 
-Completed: 
+Status: Complete
+Started: 2026-10-11T19:53:23Z
+Completed: 2026-10-11T19:57:51Z
+
+Uncommitted in worktree `.claude/worktrees/agent-a947c80b3307c0474` (branch `worktree-agent-a947c80b3307c0474`); the parent commits and merges.
 
 #### Files Modified
+- `dcp_validate.py:1` — new, 296 lines. `MAX_BYTES` (`dcp_validate.py:12`), `InvalidRequest` (`dcp_validate.py:37`), `validate_request(raw: bytes) -> dict` (`dcp_validate.py:271`). Standard library only (`json`, `re`); imports no other `dcp_*` module.
+- `tests/test_validate.py:1` — new, 722 lines, 86 `unittest` test methods in 9 classes. No `__init__.py` created.
+- `.claude-hve-tracking/changes/2026-10-11/director-context-picker-changes.md:14` — this section, written in the WORKTREE copy (see Issues Encountered).
 
 #### Steps Completed
+- [x] Step 1.1: `InvalidRequest` and `validate_request` per details section 2 — `dcp_validate.py:37`, `dcp_validate.py:271`. Size check before decode (`dcp_validate.py:108`), strict UTF-8 decode, BOM rejection, `raw_decode` from the first non-whitespace index with a JSON-whitespace-only tail check (`dcp_validate.py:107`); decoder hooks for duplicate keys, float notation and non-finite constants (`dcp_validate.py:62`); version graph by Kahn's algorithm with strict-ancestor bitmasks (`dcp_validate.py:126`); features, cards (two passes so forward card references work), supersession ancestry (`dcp_validate.py:189`); contradictions with unordered-pair dedup (`dcp_validate.py:235`); catch-all conversion to `InvalidRequest` (`dcp_validate.py:295`).
+- [x] Step 1.2: tests for every rule listed in the plan step, accepting and rejecting — `tests/test_validate.py:1`. The step 1.1 parser assumption [MEDIUM] is pinned by `test_json_decoder_python_defaults_pinned` and now holds as [HIGH] on the host's `python3.11`: `parse_float` receives `1.0` and `1e2`, `parse_constant` receives `NaN`/`Infinity`/`-Infinity`, default `json.loads` keeps the last duplicate key, a 5,000-digit literal raises `ValueError`, 100,000-deep nesting raises `RecursionError`.
+- [x] Step 1.3: gate run as `python3.11 -m unittest discover -s tests -p 'test_validate.py' -v > gate.log 2>&1; echo rc=$?` — final run `rc=0`.
 
 #### Issues Encountered
+- Changes-log location: the brief said to edit this section in the MAIN checkout by absolute path. The Edit tool refused that path ("This agent is isolated in the worktree ... Edit the worktree copy of this file instead of the shared-checkout path"). I did not work around the guard through the shell. This section therefore exists only in the worktree copy, uncommitted; the main checkout's Phase 1 section still reads `Status: Pending` until the parent carries this section over.
+- First gate run: `rc=1`, 86 run, 3 errors. All three were bugs in my own test fixtures, not validator behavior, and no rule expectation was changed: (1) the "good identifier" list used card id `a`, which collides with the base fixture's card `a` (correctly rejected as a duplicate id) — changed to `Z`; (2) and (3) `big_request()` made card `i` supersede card `i - 96`, which sits in the same version (correctly rejected) — changed to card `i - 1` for `i % 96 != 0`, a strict ancestor in the version chain. Second run `rc=0`.
+- The details file and the contract did not disagree on any rule I implemented; no DR- entry.
+- No instructions-file gap: `~/.claude/instructions/python.md` and `python-tests.md` were read; their third-party parts (`uv`, `ruff`, `pytest`, 3.12 target) were not applied, per the phase brief (Python 3.11 standard library only, `unittest`). Line length 120 kept (0 lines over).
+- Sample-session test looks for `./director_session.json` then `./resources/director_session.json` and SKIPS if neither exists (the details file does not say fail-or-skip for this file, unlike the corpus). In this tree it ran; 0 skipped.
 
-Tests: not run — phase 1 not started
+#### Discrepancies & Decisions
+- DD-P1-01 (2026-10-11): `validate_request` passes a `parse_int` hook that rejects integer literals longer than 32 characters before conversion (`dcp_validate.py:49`). Details section 2 relies on the 3.11 default (`ValueError` over 4,300 digits). The accept/reject outcome is identical for every input, because every integer the contract allows is at most 4 digits and an integer anywhere else is a type error; the hook only removes the dependence on the interpreter's `int_max_str_digits` setting. Not a contract change.
+- DD-P1-02 (2026-10-11): input whose first non-whitespace character is not `{` is rejected before JSON parsing (`dcp_validate.py:116`). Same outcome as parsing first (a non-object is invalid either way), without parsing a large non-object document.
+
+#### Measurements (host `python3.11`, not the recorded Docker run)
+- Corpus one-liner over `resources/benchmark_inputs.json` (28 instances, each `request` re-serialized with `json.dumps`): 26 validate, 2 raise `InvalidRequest` (the two reasons printed were "contradiction pairs a card with itself" and "contradiction must be an array of two card ids"). Whether those 2 are the corpus's intended `invalid` cases was NOT checked against expected statuses here (Phase 8 `tests/test_corpus.py` owns that).
+- Slowest corpus validation: 9.22 ms, single run, for a 477,307-byte request with 488 cards and 6,496 pairs. The brief's 488-card, 7,424-pair instance was not identified separately in this pass; no instance took longer than 9.22 ms.
+- Limit-sized generated request (96 versions, 500 cards, 1,024 features, 10,000 pairs, over 400,000 bytes) and the sample session each validate in under 100 ms (asserted by the two timing tests, best of 5).
+
+Tests: 86 passed, 0 failed (0 skipped) — `python3.11 -m unittest discover -s tests -p 'test_validate.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`, "Ran 86 tests in 0.178s", "OK".
 
 ---
 
@@ -30,17 +52,46 @@ Tests: not run — phase 1 not started
 
 
 ### Phase 2: Model and legality core
-Status: Pending
-Started: 
-Completed: 
+Status: Complete
+Started: 2026-10-11T19:53:23Z
+Completed: 2026-10-11T19:56:31Z
+
+Work was done in the worktree `.claude/worktrees/agent-ad673c08bd763aad8` and left uncommitted there (untracked: `dcp_model.py`, `tests/test_model.py`; modified: this changes log, Phase 2 section only). Line numbers below are from that worktree copy.
 
 #### Files Modified
+- `dcp_model.py:13` — `Infeasible` exception (new file, 367 lines, standard library only)
+- `dcp_model.py:18` — frozen `Problem` dataclass, the 15 fields of details section 3 in the given order, none added
+- `dcp_model.py:38` — `_visible_versions`: head plus ancestors, explicit stack
+- `dcp_model.py:51` — `_active_ids`: visible cards not reachable through `supersedes` from a visible card, explicit stack
+- `dcp_model.py:72` — `_closures`: iterative Tarjan over the `requires` graph of all cards; a component is dead (closure 0) when it contains or reaches a non-active card; cover and conflict are OR-propagated per component
+- `dcp_model.py:180` — `build_problem`: masks, group and pair conflicts, closure tokens, dependents, mandatory feasibility, usable set
+- `dcp_model.py:305` — `mask_tokens`, `mask_cover` (310), `cover_weight` (321), `is_legal` (326), `mask_ids` (348), `fmask_ids` (359)
+- `tests/test_model.py:1` — 55 unittest cases in 8 classes (new file, 531 lines)
 
 #### Steps Completed
+- [x] Step 2.1: `Infeasible`, `Problem`, `build_problem` and the mask helpers per details section 3 — `dcp_model.py:13`, `dcp_model.py:18`, `dcp_model.py:180`, `dcp_model.py:305`
+- [x] Step 2.2: Tests for every case the step lists — `tests/test_model.py:1`. Merge head and invisible branch (`TestVisibility`); chain, superseded superseder, invisible superseder (`TestSupersession`); requires on inactive or invisible card, cycle, self-requirement, shared requirement charged once, 500-deep chain (`TestClosures`); pair or same group inside a closure, inert pair with inactive endpoint, no transfer to a successor, non-transitivity (`TestConflicts`); mandatory inactive, invisible, pair in closure, same group, over budget, exact budget, empty mandatory at budget 0 (`TestMandatory`); one rejection per contract condition 1 to 6 (`TestIsLegal`); sample session numbers (`TestSampleSession`)
+- [x] Step 2.3: Timing on `resources/benchmark_inputs.json` instance `i_3b971612ce637e324b` (488 cards, 7,424 pairs, 476 active, 475 usable): `build_problem` min 3.05 ms, median 3.25 ms, max 5.08 ms over 25 in-process runs on the host with `python3.11` and `time.perf_counter`. Target was under 60 ms. Worst single first-call build over all 28 public instances: 3.78 ms. The corpus was read only, loaded inside a `python3.11 -c` one-liner
+- [x] Step 2.4: Gate `python3.11 -m unittest discover -s tests -p 'test_model.py' -v > gate.log 2>&1; echo rc=$?` printed `rc=0`; `gate.log` reads `Ran 55 tests in 0.031s` and `OK`
+
+#### Sample session facts pinned in tests
+`n == 7`, ids `amber_arrival, closeup, coat, moon, neon, portrait, sleeve_detail` (no `jacket`); closures portrait 32, coat 55, neon 20, moon 18, closeup 47, sleeve_detail 44, amber_arrival 102; mandatory closure `{portrait}`; usable `{closeup, coat, moon, neon, sleeve_detail}` (amber_arrival active, not usable); exhaustive `is_legal` scan over 128 masks gives best utility 61, reached by portrait + sleeve_detail + closeup with either moon or neon.
 
 #### Issues Encountered
+- Changes-log location: the brief said to edit the MAIN checkout copy of this file by absolute path. The Edit tool refused that path ("This agent is isolated in the worktree ... Edit the worktree copy of this file instead"). The section was written to the worktree copy instead, so the parent has to carry this section into the main checkout when it merges. The guard was not worked around through the shell.
+- No instructions-file gap: `~/.claude/instructions/python.md` and `python-tests.md` were read. Their third-party parts (uv, ruff, pytest, `tmp_path`, parametrize) do not apply here by brief: tests use `unittest`, test methods keep the `test_{function}_{scenario}_{outcome}` naming.
+- One public instance, `i_57be790be38419e246`, makes `build_problem` raise `ValueError` ("too many values to unpack (expected 2)", from unpacking a contradiction entry). It is a request the Phase 1 validator must reject before `build_problem` is called; `build_problem` assumes validated input by design and does not guard against it. Phase 8 must keep validation ahead of `build_problem`. [HIGH for the raise, observed; MEDIUM that the request is one the validator rejects, inferred from the error text only, the instance was not inspected]
+- 2 of the 28 public instances raise `Infeasible` from `build_problem`; not investigated further here, out of scope for this phase.
+- Extra check, not a unit test: on the 25 public instances that build, all 6,153 active-card closures and closure token sums match a naive per-card walk, and `is_legal(p, p.mandatory)` holds (0 mismatches).
+- No timing assertion was put in the test file (a wall-clock assert would be flaky); the number above is the record for step 2.3.
 
-Tests: not run — phase 2 not started
+#### Discrepancies & Decisions
+- DD-P2-1 (2026-10-11): `dependents[i]` always has bit `i` set, including for a card whose `closure[i] == 0`. Details section 3 defines it as "active cards j with closure[j] containing i (includes i)"; for a closure-0 card the two halves of that sentence disagree. Chose the literal "(includes i)" so the invariant holds for every card. No other card can appear in the dependents of a closure-0 card, since a card requiring it also has closure 0. Consumers only ever remove selected cards, which have nonzero closures, so behavior is unaffected.
+- DD-P2-2 (2026-10-11): `is_legal` returns False for a negative mask or a mask with a bit at or above `n`. Contract condition 1 (selected cards are active and visible) is otherwise carried by the representation: only active cards have bits. A card that requires an inactive card is rejected through `closure[i] == 0`.
+- DD-P2-3 (2026-10-11): `Infeasible` reasons are fixed ASCII strings and never include request ids, matching the validator's rule of not echoing request text.
+- No DR- items: the details file and contract lines 64-101 agree on everything implemented.
+
+Tests: 55 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_model.py' -v`, rc=0)
 
 ---
 
@@ -48,17 +99,42 @@ Tests: not run — phase 2 not started
 
 
 ### Phase 3: Independent legality checker, oracle and generators
-Status: Pending
-Started: 
-Completed: 
+Status: Complete
+Started: 2026-10-11T19:53:24Z
+Completed: 2026-10-11T19:58:12Z
+
+Work was done in worktree `.claude/worktrees/agent-a36fe6f91b2ba87e3` (branch `worktree-agent-a36fe6f91b2ba87e3`), left uncommitted for the parent to commit and merge.
 
 #### Files Modified
+- `tests/checker.py:1` — new, 280 lines. `visible_versions` (`:23`), `active_cards` (`:36`), `requires_closure` (`:55`), `legality_errors` (`:69`, the six conditions, messages prefixed `condition N:`), `expected_feasible` (`:103`), `response_for` (`:109`), `certificate_errors` (`:146`, messages prefixed `certificate:`), `check_response` (`:178`), `certificate_bound` (`:247`), `is_certificate_profile` (`:264`). Sets and dicts on the raw request; explicit stacks, no recursion.
+- `tests/oracle.py:1` — new, 100 lines. `best_set` (`:13`) and `best_utility` (`:95`). Explicit-stack include/exclude enumeration over active cards with its own closure, group, pair, budget and mandatory tests; takes only the active set from `checker`.
+- `tests/gen.py:1` — new, 224 lines. `random_request` (`:53`), `max_request` (`:110`), `permute_request` (`:182`).
+- `tests/test_checker_oracle.py:1` — new, 560 lines, 45 `unittest` tests, including its own structural input-contract validator `assert_valid_request` so the generators are not their own judge.
 
 #### Steps Completed
+- [x] Step 3.1: `checker.py` per details section 4, written from the contract text (lines 80-145), with sets and dicts — `tests/checker.py:1`
+- [x] Step 3.2: `oracle.py` exhaustive search over subsets of active cards — `tests/oracle.py:13`
+- [x] Step 3.3: `gen.py` `random_request`, `permute_request` and `max_request` — `tests/gen.py:53`
+- [x] Step 3.4: Self-tests pinned to hand-derived values (sample session 7 active and optimum 61; the seven tiny public requests; one illegal response per legal-set condition; certificate formula by hand) and `permute_request` preserving `best_utility` on 30 generated requests — `tests/test_checker_oracle.py:176`
+- [x] Step 3.5: Gate run: `python3.11 -m unittest discover -s tests -p 'test_checker_oracle.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`
 
 #### Issues Encountered
+- This section was written to the WORKTREE copy of the changes log, not the main checkout as the brief asked: the Edit tool refused the main-checkout path ("This agent is isolated in the worktree ... Edit the worktree copy of this file instead"). The refusal was not worked around. The parent has to carry this section into the main-checkout log (it is an uncommitted change to this one file, confined to the Phase 3 section).
+- First gate run: rc=1, 1 error in 45 tests. Cause was in the test file only: a helper named `_outcome` shadowed `unittest.TestCase._outcome`. Renamed to `_solve`; second run rc=0. No expectation was changed.
+- `~/.claude/instructions/python.md` and `python-tests.md` assume pytest, ruff, uv and Python 3.12+. Per the phase brief those parts were not applied (Python 3.11 standard library, `unittest`). Applied: type hints on public functions, `from __future__ import annotations`, f-strings, 120-column lines, seeded randomness only. Only the first ~2.5 KB of each instructions file was read (time limit).
+- Success criterion `grep -n "import dcp" tests/checker.py tests/oracle.py tests/gen.py`: no output (grep exit 1). The same check is also a test (`IndependenceTests`).
+- Oracle timing measured on the host: 18 active cards 0.20 s, 20 active cards 0.79 s (a request where no pruning is possible).
+- Not run: ruff or any linter (none is a project dependency). Not run: the full `discover -s tests` suite (other phases' files are not in this worktree).
+- `git status --short -uall` after the gate lists only the four owned files plus this log: `gate.log` and `tests/__pycache__/` are ignored.
 
-Tests: not run — phase 3 not started
+#### Discrepancies & Decisions
+- DD-P3-1 (2026-10-11): `check_response(request, response, *, request_valid: bool = True)` adds a keyword-only argument to the signature in details section 4. Reason: the parent brief asked for it so the two invalid tiny requests (i_93a2, i_57be) can be pinned. With `request_valid=False` the only accepted response is exactly `{"status": "invalid", "reason": <nonempty str>}`. Callers written against details section 4 are unaffected.
+- DD-P3-2 (2026-10-11): Added helpers beyond details section 4, all additive: `checker.visible_versions`, `checker.requires_closure`, `checker.legality_errors`, `checker.response_for(request, selected)` (an `ok` response with honestly recomputed totals, no legality check), `checker.certificate_errors`, and `oracle.best_set(request, limit=20) -> (utility, sorted ids)`. `best_utility` wraps `best_set`.
+- DD-P3-3 (2026-10-11): A malformed or out-of-range certificate on an otherwise correct `ok` response IS reported by `check_response`, with every such message prefixed `certificate:`. The contract (line 145) judges certificates apart from the core fields, so a caller grading the core only must filter that prefix. Certificate tightness (`100 * U <= 105 * utility * s`) is NOT checked by `check_response`; callers compute it from `certificate_bound`.
+- DD-P3-4 (2026-10-11): `oracle` is not fully independent of `checker`: it calls `checker.active_cards` (allowed by the brief). Its legality test is its own code. A bug in visibility or supersession would therefore be shared between the two; that part is pinned by hand-derived tests (`SupersessionTests`, tiny i_f4bb, sample session 7 active).
+- DD-P3-5 (2026-10-11): `gen.max_request` sets `mandatory: []`, so it is always feasible. In the non-profile form the 200-card requires chain is `c0 -> c1 -> ... -> c199`, the cycle is `c200 -> c201 -> c202 -> c200`, and groups `g0..g19` are only on cards `c203` and above. `gen.random_request` draws feature weights from 1-100, not 1-1,000.
+
+Tests: 45 passed, 0 failed (`Ran 45 tests in 0.413s`, `OK`, rc=0)
 
 ---
 

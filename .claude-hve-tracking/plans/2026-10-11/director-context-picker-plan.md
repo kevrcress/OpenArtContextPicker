@@ -200,3 +200,44 @@ Unit tests per module; an independent checker and brute-force oracle that share 
 - DR-006 contract maxima end to end: step 8.4b; `gen.py` gains `max_request` (details section 4).
 
 Minor items taken: bound wording tightened and moves restricted to usable cards (details sections 5 and 6); `build/` ignored via `.gitignore`, owned by Phase 4; instance count corrected to 18; search-deadline wording made consistent; response when `build_problem` itself crashes stated (details section 8); long exact runs on the three mid instances as 99% evidence (step 8.7). Not taken: a relaxation upper bound per large coupled instance (DR-007 second half), for time; named tests for R-05, R-15, R-21, R-34, R-42 reverse, R-75, R-85, A-14 are folded into steps 1.2 and 8.2 at the implementor's discretion (DR-008, Minor). A-15, A-18 and A-19 need no code: lone surrogates in `text` are accepted and never echoed, determinism is not required, and `mandatory` has no separate size limit (theme A artifact).
+
+## Requirements added after plan approval
+
+### 2026-10-11 12:57 PDT — implementation lands through reviewable pull requests (owner)
+
+Owner's words: "Let's make sure to breakup chunks of implementation into reviewable pieces so that I can have Codex review, ideally as work broken up into appropriate PRs that can be merged into main after Codex's review and any re-work is done from the review".
+
+This supersedes the kick-off's "Solo repo, no pull requests ... you integrate to main and push at each phase boundary". How every later phase command applies it:
+
+- One pull request per plan phase, base `main`, branch `phase-N-<slug>`, body with a TL;DR, the files the phase owns, its gate command and result, and `Refs #<issue>` (no closing keywords). Milestone `director-context-picker`.
+- Implementation never goes to `main` directly. The owner merges each PR after Codex's review and any rework. The orchestrator does not merge PRs and does not run Codex; it triages review findings and dispatches rework onto the phase branch.
+- So that later phases are not blocked on review, phase branches are also merged into a local-and-pushed branch `integration` (main plus every delivered phase branch). A phase with dependencies starts from `main` plus `git merge integration`; its PR shows dependency files until those PRs merge, and its body lists the owned files to review. After a dependency PR merges, `main` is merged into the dependent branches.
+- Tracking artifacts under `.claude-hve-tracking/` and repo hygiene (`.gitignore`) are not implementation and continue to be committed to `main` directly.
+- Review rework and the recorded run: a `.py` change after the recorded run forces a rerun (Phase 9). Codex findings that arrive before the recorded run starts are reworked first. Findings that arrive later are reworked only if a rerun still fits before the deadline; otherwise they are listed as unfixed in the final report. The ZIP is built from `integration` (identical to `main` once every phase PR is merged); the final report states which PRs were merged at build time.
+- Board: a phase issue moves to In review when its PR opens and is closed by gh-tracker when its phase is Complete and its PR is merged; if the PR is still open at the end, the issue stays In review with a comment saying why.
+
+### 2026-10-11 13:00 PDT — reference scenarios as a second oracle (orchestrator decision, from an owner-side file)
+
+`docs/reference-scenarios/` (README.md, build_scenarios.py, scenarios.json; 102 scenarios with brute-force expected answers) appeared untracked in the working tree at 12:48 PDT, written by the owner's other session, not by this workflow. It is used as an independent second oracle:
+
+- Phase 8 adds `tests/data/reference_scenarios.json` (a byte copy of `docs/reference-scenarios/scenarios.json`) and `tests/test_reference_scenarios.py`: every scenario goes through the CLI (`raw_stdin` verbatim when present, else `request` serialized), exit code 0, `expect.status` matches, and for `ok` the utility equals `expect.utility` and the response passes `tests/checker.py`.
+- Cross-check already run by the orchestrator at 12:59 PDT on `integration` (`5351980`): all 102 scenarios agree with `dcp_validate` (valid versus invalid), `dcp_model` (ok versus infeasible, active set), `tests/checker.py` (feasibility, active set) and `tests/oracle.py` (utility); 400 generated requests (130 infeasible) show 0 disagreements between the model and the checker and oracle. Command: an inline `python3.11` script in the integration worktree; output `reference scenarios: 102 | disagreements: 0` and `random differential: 400 requests, 130 infeasible, 0 disagreements`.
+- The `docs/reference-scenarios/` folder itself is left untracked for its author to commit.
+
+### 2026-10-11 13:01 PDT — hold before the ZIP build; reference scenarios confirmed (owner)
+
+Owner's words: "pause before building the zip so i can review -- we want to resolve as much as possible before shipping, but some minor issues are ok." and, on using `docs/reference-scenarios/` as a second oracle: "yes, this was the intention."
+
+- Phase 11 does not start step 11.2 (package and ZIP build) until the owner says to. Before that point the orchestrator reports: every open PR and its review state, every unresolved Codex and HVE review finding with severity, and the recorded-run results. Critical and Major findings are resolved before the checkpoint where time allows; Minor ones may ship and are listed.
+- The Phase 9 recorded run may happen before the checkpoint; if rework after it changes any `.py`, Phase 9 is repeated before the ZIP.
+
+### 2026-10-11 13:04 PDT — reference scenarios: owner's instructions in full
+
+The owner pasted the note that accompanies `docs/reference-scenarios/` (102 scenarios: 38 ok, 8 infeasible, 56 invalid; schema `reference-scenarios/1`). It refines the 13:00 entry above; where they differ, this entry wins.
+
+- `docs/reference-scenarios/` is committed to `main` as it stands (source of truth; never edited by this workflow).
+- Phase 8 (issue #9) owns the test: `tests/test_reference_scenarios.py` runs `context_solver.py` as a subprocess on every scenario, feeding `raw_stdin` verbatim when present, otherwise `request` serialized as JSON. Assertions: exit code 0 and exactly one JSON object on stdout; status equals `expect.status`; for `ok`, utility equals `expect.utility`, the selection passes `tests/checker.py`, `tokens` and `covered` match a recomputation from `selected`, and where `optimal_selections` is present `selected` is one of them.
+- The scenarios ship in the ZIP as a copy, `tests/data/reference_scenarios.json`, so the README's regression command exercises them after a clean extraction. A test asserts the copy is byte-identical to `docs/reference-scenarios/scenarios.json` when the latter exists (repo), and is skipped only for that comparison in the package.
+- The full regression, including this test, runs as a gate (`<cmd> > gate.log 2>&1; echo rc=$?`) before the recorded benchmark run (step 9.1).
+- They are a cross-check. The project's own oracle and checker stay; `build_scenarios.py` is not imported by any test. If the solver and a scenario disagree, the contract clause is read first, and a scenario judged wrong is reported to the owner by id with the reason; no expected answer is edited.
+- Not covered by them and still owed by the project's own tests: 250 to 500 card instances, exactness at 19 to 24 active cards, invalid UTF-8, the 16 MiB limit, the certificate.

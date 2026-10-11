@@ -23,3 +23,7 @@ director-context.zip
 
 # macOS
 .DS_Store
+
+# Agent worktrees and build output
+.claude/worktrees/
+build/
