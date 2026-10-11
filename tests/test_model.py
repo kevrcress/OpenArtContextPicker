@@ -12,6 +12,14 @@ from dcp_model import Infeasible, build_problem
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _supplied(name):
+    """Locate a supplied file at the package root, else under resources/; fail if absent."""
+    for candidate in (os.path.join(_ROOT, name), os.path.join(_ROOT, "resources", name)):
+        if os.path.exists(candidate):
+            return candidate
+    raise AssertionError(f"supplied file {name} not found at {_ROOT} or {os.path.join(_ROOT, 'resources')}")
+
+
 def card(cid, version="v0", requires=(), supersedes=(), group=None, tokens=1, covers=()):
     """Build one card dict in the validated request shape."""
     return {
@@ -454,7 +462,7 @@ class TestMaskHelpers(unittest.TestCase):
 class TestSampleSession(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(_ROOT, "resources", "director_session.json"), encoding="utf-8") as handle:
+        with open(_supplied("director_session.json"), encoding="utf-8") as handle:
             cls.req = json.load(handle)
         cls.p = build_problem(cls.req)
 
