@@ -1,4 +1,4 @@
-"""Greedy construction plus iterated ejection-and-refill local search for large instances.
+"""Greedy construction plus simulated annealing over legal sets for large instances.
 
 `solve_large` works on a `dcp_model.Problem`. It keeps the selected set as an integer bitmask
 (for conflict and closure tests) next to per-feature cover counts and running token and utility
@@ -12,16 +12,12 @@ import time
 from dcp_model import is_legal
 
 DEFAULT_SEED = 20261011
-CLOCK_EVERY = 1           # loop iterations between clock checks (a closure-heavy move can take over 1 ms)
 DROP_SAMPLE = 8           # selected cards sampled when a move has to shed tokens
-ROUND_MOVES = 40000       # moves in one annealing round; a round restarts from the best set seen
-T_HOT = 1.0               # start and end temperature of a round, in units of the mean utility per card
-T_COLD = 0.03
-RESTART_BEST = True
+ROUND_MOVES = 5000        # moves in one annealing round; a round restarts from the best set seen
+T_HOT = 1.0               # start temperature of a round, in units of the mean utility per selected card
+T_COLD = 0.03             # end temperature of a round, same unit
 TOURNAMENT = True         # propose the less conflicting of two random cards
-LAM_CYCLE = (1.0, 0.2)       # per-round multipliers of the token price
-COUNT_FIRST = False       # on weighted instances, first anneal with every feature weighing 1
-COUNT_SHARE = 0.3         # share of the time that phase may take
+LAM_CYCLE = (1.0, 0.2)    # per-round multipliers of the token price
 LAMBDA = 0.25             # token price, as a fraction of the greedy set's utility per token
 
 # Filled by the last call; read by tools/tune_search.py. Not part of the solver contract.
@@ -41,15 +37,15 @@ def _bits(mask: int) -> list:
     return out
 
 
-def solve_large(p, deadline: float, seed: int = DEFAULT_SEED, *, max_moves: int = 0) -> int:
+def solve_large(p, deadline: float, seed: int = DEFAULT_SEED, *, max_moves=None) -> int:
     """Return a legal mask (at least p.mandatory). Runs until `deadline` (time.perf_counter() value) at the latest.
 
-    `max_moves` (0 means no limit) stops the search after that many loop iterations; it exists so that
+    `max_moves` (None or 0 means no limit) stops the search after that many loop iterations; it exists so that
     tools can compare search variants by work done instead of by wall time on a loaded host.
     """
     result = [p.mandatory, p.mandatory]  # [best seen, greedy result]
     try:
-        _search(p, deadline, random.Random(seed), result, max_moves)
+        _search(p, deadline, random.Random(seed), result, max_moves or 0)
     except _Timeout:
         pass
     for mask in result:
@@ -194,13 +190,11 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
     built_util = -1
     built_mask = mandatory
     built_mode = 0
-    starts = {}
     t_start = clock()
     try:
         for mode in (0, 2, 1):
             load(mandatory)
             refill(0, mode)
-            starts[mode] = S
             if util > built_util:
                 built_util, built_mask, built_mode = util, S, mode
                 result[0] = result[1] = S
@@ -209,10 +203,6 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
             result[0] = result[1] = S
         raise
     load(built_mask)
-    built_toks = toks
-    g_util = util
-    g_mask = S
-    g_mode = 2 if built_mode == 2 else 0
     LAST_STATS["greedy_mode"] = built_mode
     LAST_STATS["greedy_utility"] = util
     if not n_us or not p.usable & ~S:
@@ -225,22 +215,15 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
     best_util = util
     best_toks = toks
     best_mask = S
-    unit = 1.0
-    lam = 0.0
-    t_hot = 1.0
+    unit = util / max(1, len(sel)) if util else 1.0
+    lam = LAMBDA * util / toks if toks and util else 0.0
+    t_hot = T_HOT * unit
     cool = (T_COLD / T_HOT) ** (1.0 / ROUND_MOVES)
     exp = math.exp
     moves = 0
     rounds = 0
 
-    def retune():
-        # Temperature and token price follow the scale of the set in hand.
-        nonlocal unit, lam, t_hot
-        unit = util / max(1, len(sel)) if util else 1.0
-        lam = LAMBDA * util / toks if toks and util else 0.0
-        t_hot = T_HOT * unit
-
-    def anneal(stop_moves, stop_time, publish):
+    def anneal(stop_moves, stop_time):
         nonlocal best_util, best_toks, best_mask, moves, rounds
         temp = t_hot
         price = lam * LAM_CYCLE[rounds % len(LAM_CYCLE)]
@@ -257,14 +240,12 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
                 rounds += 1
                 temp = t_hot
                 price = lam * LAM_CYCLE[rounds % len(LAM_CYCLE)]
-                if RESTART_BEST:
-                    load(best_mask)
-                    journal.clear()
-                    refill(0, 0)
-                    if util > best_util:
-                        best_util, best_toks, best_mask = util, toks, S
-                        if publish:
-                            result[0] = S
+                load(best_mask)
+                journal.clear()
+                refill(0, 0)
+                if util > best_util:
+                    best_util, best_toks, best_mask = util, toks, S
+                    result[0] = S
             else:
                 temp *= cool
 
@@ -349,8 +330,7 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
             if ok:
                 if util > best_util or (util == best_util and toks < best_toks):
                     best_util, best_toks, best_mask = util, toks, S
-                    if publish:
-                        result[0] = S
+                    result[0] = S
             else:
                 while journal:
                     x = journal.pop()
@@ -359,44 +339,8 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
                     else:
                         add(~x)
 
-    retune()
     try:
-        true_w = weights
-        if COUNT_FIRST and len({w for w in true_w if w > 0}) > 1:
-            # Phase 1 looks for a large legal set: the same search with every feature weighing 1. A
-            # set of many medium cards is out of reach of a walk that starts from the heaviest cards.
-            for i in list(sel):
-                drop(i)
-            weights = tuple(1 if w > 0 else 0 for w in true_w)
-            for i in _bits(mandatory):
-                add(i)
-            refill(0, 2)
-            best_util, best_toks, best_mask = util, toks, S
-            retune()
-            share = int(max_moves * COUNT_SHARE) if max_moves else ROUND_MOVES
-            anneal(min(share, ROUND_MOVES), t_start + (deadline - t_start) * COUNT_SHARE, False)
-            count_mask = best_mask
-            for i in list(sel):
-                drop(i)
-            weights = true_w
-            for i in _bits(count_mask):
-                add(i)
-            if clock() < deadline:
-                # One round from the large set, then go on from whichever start did better.
-                journal.clear()
-                refill(0, 0)
-                best_util, best_toks, best_mask = util, toks, S
-                if util > built_util:
-                    result[0] = S
-                retune()
-                anneal(moves + ROUND_MOVES - 1, deadline, util > built_util)
-                if best_util > built_util:
-                    result[0] = best_mask
-                else:
-                    best_util, best_toks, best_mask = built_util, built_toks, built_mask
-                load(best_mask)
-                retune()
-        anneal(max_moves, deadline, True)
+        anneal(max_moves, deadline)
         if clock() < deadline:
             load(best_mask)
             journal.clear()
