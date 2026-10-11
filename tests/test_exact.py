@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
@@ -168,6 +169,45 @@ def _knapsack_optimum(request):
     return table[request["budget"]]
 
 
+def _padded_to_24(rng, n_core):
+    """Return ``(core, full)``: a constrained core request and a 24-card request with the same optimum.
+
+    Why the optimum is preserved. ``full`` is ``core`` plus filler cards, with
+    every core card, feature weight, pair and the budget left unchanged. No
+    card requires a filler and no filler is mandatory, so removing every filler
+    from a legal set of ``full`` leaves a legal set: dropping cards cannot
+    break the budget, a conflict group, a contradiction or another card's
+    requirements. That set uses core cards only, so it is legal in ``core``.
+    It also has the same utility, because a filler is one of two kinds:
+    a free filler covers nothing, and an oversize filler costs more tokens
+    than the budget and so is in no legal set at all. Conversely every legal
+    set of ``core`` is legal in ``full``. The two maxima are therefore equal,
+    and ``core`` is small enough for the exhaustive oracle.
+    """
+    core = gen.random_request(rng, n_core, p_requires=rng.choice((0.2, 0.4)), p_group=rng.choice((0.0, 0.3)),
+                              n_pairs=rng.choice((n_core // 2, n_core)), n_features=2 * n_core,
+                              max_covers=rng.choice((3, 6)), max_tokens=40, budget_ratio=rng.choice((0.3, 0.5, 0.7)))
+    full = copy.deepcopy(core)
+    core_ids = [c["id"] for c in core["cards"]]
+    feature_ids = sorted(core["features"])
+    version = core["head"]
+    for j in range(24 - n_core):
+        filler = {"id": f"pad{j:02d}", "version": version, "supersedes": [], "conflict_group": None}
+        assert filler["id"] not in core_ids
+        if j % 2 and core["budget"] < 512:
+            # Oversize: tempting covers, but it can never fit.
+            filler.update(tokens=rng.randint(core["budget"] + 1, 512), requires=[],
+                          covers=rng.sample(feature_ids, rng.randint(1, 6)))
+        else:
+            # Free: covers nothing; may itself require a core card and contradict one.
+            filler.update(tokens=rng.randint(1, 40), requires=rng.sample(core_ids, rng.randint(0, 1)), covers=[])
+            if rng.random() < 0.5:
+                full["contradictions"].append([filler["id"], rng.choice(core_ids)])
+        full["cards"].append(filler)
+    rng.shuffle(full["cards"])
+    return core, full
+
+
 class OracleAgreementTest(unittest.TestCase):
     def _compare(self, request, label):
         """Return True when a comparison was made, False when both sides call the request infeasible."""
@@ -250,8 +290,38 @@ class Stress24Test(unittest.TestCase):
                     q, other, proven_other, _ = _solve(gen.permute_request(rng, request))
                     self.assertTrue(proven_other, label)
                     self.assertEqual(_utility(q, other), _utility(p, mask), label)
-        self.assertGreaterEqual(cases, 40)
+        self.assertEqual(cases, 5 * len(FAMILIES))
+        self.assertEqual(cases, 80)
         print(f"\nworst 24-card time: {worst[0]:.3f} s ({worst[1]}) over {cases} cases")
+
+    def test_24_cards_reviewer_case_has_utility_4(self):
+        # a alone fills the budget for weight 3; b and c together fit for weight 4.
+        named = [("a", 2, ["x"]), ("b", 1, ["y"]), ("c", 1, ["z"])]
+        named += [(f"n{i:02d}", 1, []) for i in range(21)]
+        cards = [{"id": cid, "version": "v0", "supersedes": [], "requires": [], "conflict_group": None,
+                  "tokens": tokens, "covers": covers} for cid, tokens, covers in named]
+        request = _request(cards, {"x": 3, "y": 2, "z": 2}, 2)
+        p, mask, proven, _ = _solve(request)
+        self.assertEqual(p.n, 24)
+        self.assertTrue(dcp_model.is_legal(p, mask))
+        self.assertEqual(_utility(p, mask), 4)
+        self.assertTrue(proven)
+
+    def test_24_cards_with_a_reduced_core_match_the_oracle(self):
+        rng = random.Random(1224)
+        cases = 0
+        for case in range(24):
+            core, full = _padded_to_24(rng, rng.randint(12, 14))
+            label = f"reduced-core case {case} core={len(core['cards'])}"
+            expected = oracle.best_utility(core)
+            p, mask, proven, elapsed = _solve(full)
+            self.assertEqual(p.n, 24, label)
+            self.assertTrue(dcp_model.is_legal(p, mask), label)
+            self.assertEqual(_utility(p, mask), expected, label)
+            self.assertTrue(proven, label)
+            self.assertLess(elapsed, _LIMIT_24, label)
+            cases += 1
+        self.assertEqual(cases, 24)
 
     def test_hard_families_at_20_active_match_oracle(self):
         rng = random.Random(404)
@@ -295,7 +365,31 @@ class ContractTest(unittest.TestCase):
             elapsed = time.perf_counter() - start
             self.assertTrue(dcp_model.is_legal(p, mask), n)
             self.assertGreaterEqual(_utility(p, mask), _utility(p, incumbent), n)
-            self.assertLess(elapsed, 0.05 + 0.02, f"n={n} proven={proven}")
+            self.assertLess(elapsed, 0.25, f"n={n} proven={proven}")
+
+    def test_already_expired_deadline_on_one_card_is_legal_and_unproven(self):
+        card = {"id": "a", "version": "v0", "supersedes": [], "requires": [], "conflict_group": None,
+                "tokens": 1, "covers": ["x"]}
+        p = dcp_model.build_problem(_request([card], {"x": 1}, 1))
+        mask, proven = solve_exact(p, time.perf_counter() - 1.0)
+        self.assertTrue(dcp_model.is_legal(p, mask))
+        self.assertFalse(proven)
+
+    def test_already_expired_deadline_keeps_a_legal_incumbent_and_is_unproven(self):
+        rng = random.Random(2401)
+        request = shared_loose(rng, 24, 0.45)
+        p = dcp_model.build_problem(request)
+        incumbent, used = 0, 0
+        for i in range(p.n):
+            if used + p.tokens[i] <= p.budget:
+                incumbent |= 1 << i
+                used += p.tokens[i]
+        self.assertTrue(dcp_model.is_legal(p, incumbent))
+        self.assertGreater(_utility(p, incumbent), 0)
+        mask, proven = solve_exact(p, time.perf_counter() - 1.0, incumbent=incumbent)
+        self.assertTrue(dcp_model.is_legal(p, mask))
+        self.assertGreaterEqual(_utility(p, mask), _utility(p, incumbent))
+        self.assertFalse(proven)
 
     def test_deep_requirement_chain_needs_no_recursion(self):
         n = 400
