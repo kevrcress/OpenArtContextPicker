@@ -12,6 +12,8 @@ import time
 from dcp_model import is_legal
 
 DEFAULT_SEED = 20261011
+GUARD_MIN_S = 0.001       # the search stops this long before the deadline, or longer after a slow step
+GUARD_MAX_S = 0.02
 DROP_SAMPLE = 8           # selected cards sampled when a move has to shed tokens
 ROUND_MOVES = 5000        # moves in one annealing round; a round restarts from the best set seen
 T_HOT = 1.0               # start temperature of a round, in units of the mean utility per selected card
@@ -222,16 +224,23 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
     exp = math.exp
     moves = 0
     rounds = 0
+    guard = GUARD_MIN_S
 
     def anneal(stop_moves, stop_time):
-        nonlocal best_util, best_toks, best_mask, moves, rounds
+        nonlocal best_util, best_toks, best_mask, moves, rounds, guard
         temp = t_hot
         price = lam * LAM_CYCLE[rounds % len(LAM_CYCLE)]
         k = 0
+        last = clock()
         while True:
             moves += 1
-            if clock() >= stop_time:
+            now = clock()
+            if now + guard >= stop_time:
                 break
+            # Leave room for the slowest step seen so far (bounded), so a long move cannot overrun.
+            if now - last > guard:
+                guard = min(GUARD_MAX_S, now - last)
+            last = now
             if stop_moves and moves >= stop_moves:
                 break
             k += 1
@@ -341,7 +350,7 @@ def _search(p, deadline: float, rng, result: list, max_moves: int = 0) -> None:
 
     try:
         anneal(max_moves, deadline)
-        if clock() < deadline:
+        if clock() + 4 * guard < deadline:
             load(best_mask)
             journal.clear()
             refill(0, 0)
