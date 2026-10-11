@@ -9,7 +9,8 @@ way the recorder does, judges that object with the independent checker in
 Markdown table plus summary figures. Exit code 1 when any integrity assertion or
 core checker verdict fails, unless ``--allow-wrong`` is given. The optional
 certificate and consistency capabilities are reported in their own sections and
-never change the core result or the exit code.
+never change the core result or the exit code; both count only records whose
+core checks pass.
 """
 
 from __future__ import annotations
@@ -159,12 +160,17 @@ def evaluate(results: dict, corpus: dict, checker, *, runner_sha256: str = RUNNE
            unchanged is True and same_hashes, str(unchanged))
     expect(f"entrypoint_sha256 == python_sources_after[{ENTRYPOINT_NAME}]",
            inventories and type(entry) is str and after.get(ENTRYPOINT_NAME) == entry, str(entry))
-    if inventories and RECORDER_NAME in after:
-        expect(f"python_sources_after[{RECORDER_NAME}] == runner_sha256",
-               after[RECORDER_NAME] == results.get("runner_sha256"), str(after[RECORDER_NAME]))
-    else:
-        expect(f"python_sources_after[{RECORDER_NAME}] == runner_sha256", True,
-               "not applicable: the recorder is not in the solver's directory inventory")
+    # The recorder sits beside the solver and inventories that folder, so it always lists itself.
+    listed = [key for key, inventory in (("python_sources_before", before), ("python_sources_after", after))
+              if isinstance(inventory, dict) and RECORDER_NAME in inventory]
+    recorder_listed = len(listed) == 2
+    expect(f"{RECORDER_NAME} is in both source inventories", recorder_listed,
+           "listed in: " + (", ".join(listed) or "neither"))
+    recorded_runner = results.get("runner_sha256")
+    expect(f"python_sources_before/after[{RECORDER_NAME}] == runner_sha256",
+           recorder_listed and type(recorded_runner) is str
+           and before[RECORDER_NAME] == recorded_runner and after[RECORDER_NAME] == recorded_runner,
+           f"{before[RECORDER_NAME]}, {after[RECORDER_NAME]}" if recorder_listed else "not listed")
     expect("quota_vcpus == 2.0", quota == 2.0, str(quota))
     expect(f"{expected_records} records", len(records) == expected_records, str(len(records)))
     expect("record ids match the corpus in order", [r.get("id") for r in records] == list(requests),
@@ -211,7 +217,9 @@ def evaluate(results: dict, corpus: dict, checker, *, runner_sha256: str = RUNNE
             "problems": problems, "certificate": None, "certificate_errors": cert_errors,
             "certificate_profile": profile, "has_certificate": is_ok and "certificate" in response,
         }
-        if profile and "certificate" in response and not cert_errors and type(row["utility"]) is int:
+        # A certificate counts only on a record whose core checks pass.
+        if (profile and not problems and "certificate" in response and not cert_errors
+                and type(row["utility"]) is int):
             bound, scale = checker.certificate_bound(request, response["certificate"])
             row["certificate"] = {"U": bound, "s": scale, "utility": row["utility"],
                                   "within_5_percent": 100 * bound <= 105 * row["utility"] * scale}
@@ -227,9 +235,23 @@ def evaluate(results: dict, corpus: dict, checker, *, runner_sha256: str = RUNNE
     large_rss = [r["peak_rss_kib"] for r in large if isinstance(r["peak_rss_kib"], (int, float))]
     pairs = []
     for first, second in CONSISTENCY_PAIRS:
-        utilities = [by_id.get(i, {}).get("utility") for i in (first, second)]
-        entry = {"ids": [first, second], "L": None, "H": None, "within_half_percent": None}
-        if all(type(u) is int for u in utilities):
+        # Consistency is "in addition to legality and retained main quality": a pair is
+        # evaluable only when both members are ok responses with no core problems.
+        reasons = []
+        for rid in (first, second):
+            member = by_id.get(rid)
+            if member is None:
+                reasons.append(f"{rid} has no record")
+            elif member["problems"]:
+                reasons.append(f"{rid} fails the core checks")
+            elif member["status"] != "ok":
+                reasons.append(f"{rid} has status {member['status']!r}, not ok")
+            elif type(member["utility"]) is not int:
+                reasons.append(f"{rid} has no integer utility")
+        entry = {"ids": [first, second], "L": None, "H": None, "within_half_percent": None,
+                 "evaluable": not reasons, "not_evaluable": reasons}
+        if not reasons:
+            utilities = [by_id[rid]["utility"] for rid in (first, second)]
             low, high = min(utilities), max(utilities)
             entry.update(L=low, H=high, within_half_percent=200 * (high - low) <= high)
         pairs.append(entry)
@@ -238,19 +260,20 @@ def evaluate(results: dict, corpus: dict, checker, *, runner_sha256: str = RUNNE
     cert_failures = [f"{r['id']}: {e}" for r in rows for e in r["certificate_errors"]]
     profile_rows = [r for r in rows if r["certificate_profile"]]
     for row in profile_rows:
-        if row["certificate_errors"]:
+        if row["problems"]:
+            cert_failures.append(f"{row['id']}: the core checks fail, so a certificate here does not count")
+        elif row["certificate_errors"]:
             continue
-        if not row["has_certificate"]:
+        elif not row["has_certificate"]:
             cert_failures.append(f"{row['id']}: no certificate on a certificate-profile instance")
         elif row["certificate"] is None:
             cert_failures.append(f"{row['id']}: gap not computable (utility is not an integer)")
         elif not row["certificate"]["within_5_percent"]:
             cert_failures.append(f"{row['id']}: gap is loose, 100*U > 105*utility*s")
-        elif row["problems"]:
-            cert_failures.append(f"{row['id']}: the core response fails, so its certificate proves nothing")
     if not profile_rows:
         cert_failures.append("no ok response on a certificate-profile instance")
-    pair_failures = ["/".join(p["ids"]) + (": not evaluable" if p["within_half_percent"] is None else ": too far apart")
+    pair_failures = ["/".join(p["ids"]) + (": too far apart" if p["evaluable"]
+                                           else ": not evaluable (" + "; ".join(p["not_evaluable"]) + ")")
                      for p in pairs if p["within_half_percent"] is not True]
 
     failed = [r["id"] for r in rows if r["problems"]]
@@ -320,7 +343,8 @@ def render(summary: dict) -> str:
               "Informational: nothing in this section changes the core RESULT or the exit code.", ""]
     for pair in summary["consistency_pairs"]:
         lines.append(f"- consistency {pair['ids'][0]} / {pair['ids'][1]}: L={_cell(pair['L'])}, H={_cell(pair['H'])}, "
-                     f"200*(H-L) <= H: {_cell(pair['within_half_percent'])}")
+                     f"200*(H-L) <= H: {_cell(pair['within_half_percent'])}"
+                     + ("" if pair["evaluable"] else " (not evaluable: " + "; ".join(pair["not_evaluable"]) + ")"))
     lines += ["", f"CONSISTENCY CAPABILITY: {'PASS' if consistency['passed'] else 'FAIL'} "
                   f"({len(consistency['failures'])} of {len(summary['consistency_pairs'])} pairs not shown within 0.5%)"]
     lines += ["", "## Environment", "", "```json",
