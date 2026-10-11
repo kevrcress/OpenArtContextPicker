@@ -118,7 +118,10 @@ def random_request(rng, n_cards, *, n_versions=1, p_requires=0.3, p_group=0.3, n
 
     if n_pairs is None:
         n_pairs = n_cards // 2
-    budget = min(_MAX_BUDGET, int(budget_ratio * sum(c["tokens"] for c in cards)))
+    # Clamp before converting: a finite but enormous ratio makes the product
+    # infinite, and int(inf) raises OverflowError.
+    scaled = budget_ratio * sum(c["tokens"] for c in cards)
+    budget = _MAX_BUDGET if scaled >= _MAX_BUDGET else int(scaled)
     return {
         "versions": versions,
         "cards": cards,
