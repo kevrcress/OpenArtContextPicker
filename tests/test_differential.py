@@ -45,6 +45,53 @@ def generated_requests() -> list:
     return out
 
 
+def exact_range_requests() -> list:
+    """Twelve feasible requests with 19 to 22 active cards, small enough for the exhaustive oracle."""
+    rng = random.Random(1924)
+    out = []
+    for n in [19] * 6 + [20] * 4 + [21, 22]:
+        while True:
+            request = gen.random_request(
+                rng, n, p_requires=rng.choice((0.2, 0.4)), p_group=rng.choice((0.0, 0.3)),
+                n_pairs=rng.choice((n // 2, n)), n_features=2 * n, max_covers=rng.choice((3, 6)),
+                budget_ratio=rng.choice((0.3, 0.5, 0.7)), n_mandatory=rng.choice((0, 1)),
+            )
+            if len(checker.active_cards(request)) == n and checker.expected_feasible(request):
+                out.append(request)
+                break
+    return out
+
+
+def reduced_core_request(rng, n_core: int, n_total: int) -> tuple:
+    """Return ``(core, full)``: ``full`` has ``n_total`` active cards and the same optimum as ``core``.
+
+    ``full`` is ``core`` plus filler cards; every core card, feature weight, pair and the budget
+    is unchanged. No card requires a filler and no filler is mandatory, so dropping the fillers
+    from a legal set of ``full`` leaves a legal set of ``core``. Its utility is the same, because
+    a filler either covers nothing or costs more tokens than the budget and is in no legal set.
+    Every legal set of ``core`` is legal in ``full``, so the two maxima are equal.
+    """
+    core = gen.random_request(rng, n_core, p_requires=rng.choice((0.2, 0.4)), p_group=rng.choice((0.0, 0.3)),
+                              n_pairs=rng.choice((n_core // 2, n_core)), n_features=2 * n_core,
+                              max_covers=rng.choice((3, 6)), max_tokens=40, budget_ratio=rng.choice((0.3, 0.5, 0.7)))
+    full = copy.deepcopy(core)
+    core_ids = [c["id"] for c in core["cards"]]
+    feature_ids = sorted(core["features"])
+    for j in range(n_total - n_core):
+        filler = {"id": f"filler{j:02d}", "version": core["head"], "supersedes": [], "conflict_group": None}
+        assert filler["id"] not in core_ids
+        if j % 2 and core["budget"] < 512:
+            filler.update(tokens=rng.randint(core["budget"] + 1, 512), requires=[],
+                          covers=rng.sample(feature_ids, rng.randint(1, 6)))
+        else:
+            filler.update(tokens=rng.randint(1, 40), requires=rng.sample(core_ids, rng.randint(0, 1)), covers=[])
+            if rng.random() < 0.5:
+                full["contradictions"].append([filler["id"], rng.choice(core_ids)])
+        full["cards"].append(filler)
+    rng.shuffle(full["cards"])
+    return core, full
+
+
 def _card(request, index=0):
     return request["cards"][index % len(request["cards"])]
 
@@ -133,6 +180,40 @@ class DifferentialTest(unittest.TestCase):
         self.assertGreater(infeasible, 0)
         self.assertLess(infeasible, len(requests) // 2)
         self.assertEqual(sizes, set(range(1, 15)))
+
+    def _assert_exact(self, request: dict, expected: int, n_active: int, label: str) -> None:
+        self.assertEqual(len(checker.active_cards(request)), n_active, label)
+        resp = run(json.dumps(request).encode("utf-8"))
+        diag = dict(dcp_pipeline.LAST_DIAG)
+        self.assertEqual(checker.check_response(request, resp), [], label)
+        self.assertEqual(resp["status"], "ok", label)
+        self.assertEqual(resp["utility"], expected, label)
+        self.assertLessEqual(diag["active"], dcp_pipeline.EXACT_MAX_ACTIVE, label)
+        self.assertEqual((diag["method"], diag["active"], diag["proven"]), ("exact", n_active, True), label)
+
+    def test_19_to_22_active_cards_are_exact_through_the_pipeline(self):
+        requests = exact_range_requests()
+        self.assertGreaterEqual(len(requests), 12)
+        sizes = []
+        for index, request in enumerate(requests):
+            n = len(checker.active_cards(request))
+            sizes.append(n)
+            with self.subTest(index=index, active=n):
+                self._assert_exact(request, oracle.best_utility(request, limit=22), n, f"request {index} active={n}")
+        self.assertEqual(set(sizes), {19, 20, 21, 22})
+        sys.stderr.write(f"[differential] {len(requests)} requests with 19..22 active cards match the oracle\n")
+
+    def test_23_and_24_active_cards_with_a_reduced_core_are_exact_through_the_pipeline(self):
+        rng = random.Random(2324)
+        sizes = []
+        for index in range(12):
+            n_total = 23 + index % 2
+            core, full = reduced_core_request(rng, rng.randint(12, 14), n_total)
+            sizes.append(n_total)
+            with self.subTest(index=index, active=n_total, core=len(core["cards"])):
+                self._assert_exact(full, oracle.best_utility(core), n_total, f"reduced-core request {index}")
+        self.assertEqual((sizes.count(23), sizes.count(24)), (6, 6))
+        sys.stderr.write("[differential] 12 reduced-core requests with 23 or 24 active cards match the oracle\n")
 
     def test_single_rule_mutations_are_invalid(self):
         rng = random.Random(77)
