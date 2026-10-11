@@ -574,17 +574,25 @@ Tests: `python3.11 -m unittest discover -s tests -v`: rc=0, ran 289, passed 289,
 
 
 ### Phase 9: Recorded benchmark run
-Status: Pending
-Started: 
-Completed: 
+Status: Complete
+Started: 2026-10-11T21:00:00Z (first run); 2026-10-11T21:10:27Z (shipped run)
+Completed: 2026-10-11T21:11:15Z
 
 #### Files Modified
+- `benchmark_results.json` — the recorder's `--output` file from the shipped run, copied byte-for-byte (`cmp` identical)
+- `benchmark_run.log` — the recorder's stdout and stderr from the shipped run, 28 lines, copied byte-for-byte (`cmp` identical)
 
 #### Steps Completed
+- [x] Step 9.1: no `.py` differs between the source of the two runs (`git diff --name-only 0f4d6cc b442793 -- '*.py'` lists nothing). Full regression before the runs: `python3.11 -m unittest discover -s tests > gate.log 2>&1; echo rc=$?` gave `rc=0`, 333 tests from the repository root and `rc=0`, 337 tests, 0 skipped from a clean extraction of the package.
+- [x] Step 9.2: `python3.11 tools/build_package.py --out <dir>/pkg` (36 files), `python3.11 tools/make_zip.py <dir>/pkg <dir>/stage.zip`, `unzip` into a new empty directory, `bash tools/run_recorded.sh <dir>/run` (Docker `python:3.11-slim`, `--cpus=2 --network none`, unchanged recorder, relative paths). Recorder `rc=0`.
+- [x] Step 9.3: `python3.11 tools/check_results.py <dir>/run` gave `rc=0`: `RESULT: PASS (0 of 28 records failed, 0 integrity checks failed)`; all 14 integrity checks ok (`runner_sha256` 87694477...5943, `inputs_sha256` 164ea460...541c, `python_sources_unchanged` true, `quota_vcpus` 2.0, 28 records); statuses ok=24, invalid=2, infeasible=2; max `wall_ms` 2,700; large workload n=15, nearest-rank p95 2,700 ms, max `peak_rss_kib` 16,892; `CERTIFICATE CAPABILITY: PASS`; `CONSISTENCY CAPABILITY: PASS` (3 of 3 pairs equal). No failed, timed-out or malformed record.
+- [x] Step 9.4: both files copied into the repository root with `cp` and verified with `cmp`. They are not edited.
 
 #### Issues Encountered
+- Two runs were taken on the same source. The first (21:00Z) ran while the host was heavily loaded (load average about 43): same statuses and utilities, one large request at 3,841 ms wall where the solver's own clock showed a stall of about 1.1 s past its 2.5 s deadline, and two tiny requests above 300 ms. Its output is not shipped. The second (21:10Z, load average about 21) is the shipped run.
+- The host was still busy during the shipped run (load average about 21); timings are measurements of this run, not a best case.
 
-Tests: not run — phase 9 not started
+Tests: 337 passed, 0 failed, 0 skipped (`python3.11 -m unittest discover -s tests`, rc=0, clean package extraction, 14:00 PDT)
 
 ---
 
