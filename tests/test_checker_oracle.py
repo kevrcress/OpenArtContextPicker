@@ -485,6 +485,64 @@ class GeneratorTests(unittest.TestCase):
                 n_pairs=rng.choice([None, 0, 40]), n_mandatory=rng.randint(0, 3))
             assert_valid_request(self, request)
 
+    def test_random_request_rejects_arguments_beyond_contract_limits(self):
+        quiet = dict(p_requires=0.0, p_group=0.0, n_pairs=0)
+        cases = [
+            ("n_cards", (501,), dict(quiet, n_features=1, max_covers=0)),
+            ("n_cards", (-1,), quiet),
+            ("n_features", (1,), dict(quiet, n_features=1025)),
+            ("n_features", (1,), dict(quiet, n_features=-1)),
+            ("n_versions", (1,), dict(quiet, n_versions=97)),
+            ("n_versions", (1,), dict(quiet, n_versions=0)),
+            ("max_covers", (1,), dict(quiet, max_covers=65)),
+            ("max_covers", (1,), dict(quiet, max_covers=-1)),
+            ("max_tokens", (1,), dict(quiet, max_tokens=513)),
+            ("max_tokens", (1,), dict(quiet, max_tokens=0)),
+            ("n_pairs", (4,), dict(p_requires=0.0, p_group=0.0, n_pairs=10_001)),
+            ("n_pairs", (4,), dict(p_requires=0.0, p_group=0.0, n_pairs=-1)),
+            ("n_mandatory", (4,), dict(quiet, n_mandatory=-1)),
+            ("budget_ratio", (4,), dict(quiet, budget_ratio=-0.5)),
+            ("budget_ratio", (4,), dict(quiet, budget_ratio=float("inf"))),
+            ("budget_ratio", (4,), dict(quiet, budget_ratio=float("nan"))),
+        ]
+        for name, args, kwargs in cases:
+            with self.subTest(argument=name, args=args, kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, name):
+                    gen.random_request(random.Random(0), *args, **kwargs)
+
+    def test_random_request_accepts_contract_boundary_values(self):
+        request = gen.random_request(random.Random(0), 500, n_versions=96, n_features=1024, max_covers=64,
+                                     max_tokens=512, n_pairs=10_000, budget_ratio=1000.0)
+        assert_valid_request(self, request)
+        self.assertEqual(len(request["cards"]), 500)
+        self.assertEqual(len(request["features"]), 1024)
+        self.assertEqual(len(request["versions"]), 96)
+        self.assertEqual(len(request["contradictions"]), 10_000)
+        self.assertEqual(request["budget"], 8192)
+        self.assertLessEqual(max(len(c["covers"]) for c in request["cards"]), 64)
+        self.assertLessEqual(max(c["tokens"] for c in request["cards"]), 512)
+
+    def test_random_request_clamps_the_budget_for_huge_finite_ratios(self):
+        for ratio in (1e308, 1e30, 8193.0):
+            with self.subTest(budget_ratio=ratio):
+                request = gen.random_request(random.Random(0), 1, budget_ratio=ratio)
+                assert_valid_request(self, request)
+                self.assertEqual(request["budget"], 8192)
+        for ratio in (float("nan"), float("inf"), -1.0):
+            with self.subTest(budget_ratio=ratio):
+                with self.assertRaisesRegex(ValueError, "budget_ratio"):
+                    gen.random_request(random.Random(0), 1, budget_ratio=ratio)
+
+    def test_random_request_caps_pairs_at_the_distinct_pairs_available(self):
+        request = gen.random_request(random.Random(0), 4, p_requires=0.0, p_group=0.0, n_pairs=10_000)
+        assert_valid_request(self, request)
+        self.assertEqual(len(request["contradictions"]), 6)
+
+    def test_random_request_accepts_zero_cards_and_zero_features(self):
+        request = gen.random_request(random.Random(0), 0, n_features=0)
+        assert_valid_request(self, request)
+        self.assertEqual((request["cards"], request["features"]), ([], {}))
+
     def test_random_requests_with_mandatory_include_infeasible_ones(self):
         rng = random.Random(11)
         outcomes = {checker.expected_feasible(gen.random_request(rng, 8, n_versions=3, n_mandatory=2))
