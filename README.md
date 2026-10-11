@@ -132,7 +132,7 @@ TBD-SEARCH: this module was being reworked when this section was written. The te
 
 Once the model exists, every failure still produces an `ok` response with a legal set. An exception in a solver is written to stderr and the best legal set found so far is kept. A result is accepted only if `is_legal` passes and its utility is not below the current best. The floor is the mandatory closure, which is legal by construction. The final set is checked with `is_legal` once more before the response is built.
 
-Two paths answer `invalid` for a request that may be valid: an unexpected exception inside validation (`internal error`), and an unexpected exception while building the model (`internal error: model construction failed`). Both would be wrong answers for a valid request. They exist so that the process still returns one well-formed line. Tests force both paths; neither was observed on a valid request.
+Two paths answer `invalid` for a request that may be valid: an unexpected exception inside validation (`internal error`), and an unexpected exception while building the model (`internal error: model construction failed`). Both would be wrong answers for a valid request. They exist so that the process still returns one well-formed line. Tests force both paths.
 
 ## Tests
 
