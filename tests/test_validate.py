@@ -565,6 +565,42 @@ class TestCards(ValidateTestCase):
             with self.subTest(value=value):
                 self.assert_invalid(self.set_field("text", value))
 
+    def raw_with_text(self, literal: bytes) -> bytes:
+        """Return request bytes whose card text is the given raw JSON string body."""
+        raw = enc(self.set_field("text", "TEXT_PLACEHOLDER"))
+        self.assertEqual(raw.count(b'"TEXT_PLACEHOLDER"'), 1)
+        return raw.replace(b'"TEXT_PLACEHOLDER"', b'"' + literal + b'"')
+
+    def test_validate_request_text_lone_high_surrogate_escape_invalid(self):
+        self.assert_invalid(self.raw_with_text(b"\\ud800"))
+        self.assert_invalid(self.raw_with_text(b"a\\ud800b"))
+        self.assert_invalid(self.raw_with_text(b"\\udbff"))
+
+    def test_validate_request_text_lone_low_surrogate_escape_invalid(self):
+        self.assert_invalid(self.raw_with_text(b"\\udc00"))
+        self.assert_invalid(self.raw_with_text(b"a\\udfffb"))
+
+    def test_validate_request_text_reversed_surrogate_pair_escape_invalid(self):
+        self.assert_invalid(self.raw_with_text(b"\\udc00\\ud800"))
+
+    def test_validate_request_text_surrogate_pair_escape_valid_and_counts_as_one_character(self):
+        pair = b"\\ud83d\\ude00"
+        parsed = self.assert_valid(self.raw_with_text(pair))
+        self.assertEqual(parsed["cards"][3]["text"], "\U0001f600")
+        self.assertEqual(len(parsed["cards"][3]["text"]), 1)
+        self.assert_valid(self.raw_with_text(b"x" * 2047 + pair))
+        self.assert_valid(self.raw_with_text(pair * 2048))
+        self.assert_invalid(self.raw_with_text(b"x" * 2048 + pair))
+        self.assert_invalid(self.raw_with_text(pair * 2049))
+
+    def test_validate_request_text_raw_four_byte_utf8_emoji_valid(self):
+        emoji = "\U0001f600".encode("utf-8")
+        self.assertEqual(len(emoji), 4)
+        parsed = self.assert_valid(self.raw_with_text(emoji))
+        self.assertEqual(parsed["cards"][3]["text"], "\U0001f600")
+        self.assert_valid(self.raw_with_text(emoji * 2048))
+        self.assert_invalid(self.raw_with_text(emoji * 2049))
+
 
 class TestFeaturesBudgetMandatory(ValidateTestCase):
     def test_validate_request_feature_count_bounds(self):
