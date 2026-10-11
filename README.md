@@ -4,7 +4,7 @@ A Python 3.11 standard-library command-line program that chooses which memory ca
 
 The selection is a legal set of cards (visible from the head version, not superseded, requirements closed, one card per conflict group, no contradiction pair, within the token budget, all mandatory cards included) that maximizes the summed weight of the features the selected cards cover.
 
-Numbers marked `TBD-MEASURED` are filled in from the recorded benchmark run. Nothing in this file marked as measured was estimated.
+Every number measured in the recorded benchmark run sits in one delimited block under "Results on the public corpus". Nothing in this file stated as measured was estimated.
 
 ## Package layout
 
@@ -12,15 +12,15 @@ All paths are relative to the archive root. Every command below is run from that
 
 | Path | Purpose |
 |---|---|
-| `context_solver.py` | Entry point: stdin request, stdout response, exit code 0 |
+| `context_solver.py` | Entry point: stdin request, stdout response, exit code 0 (1 only when stdout cannot be written) |
 | `dcp_validate.py` | Strict input validation |
 | `dcp_model.py` | Active set, requirement closures, conflict masks, legality test |
 | `dcp_exact.py` | Exact branch and bound |
 | `dcp_profile.py` | Exact knapsack and upper-bound certificate for the certificate profile |
-| `dcp_search.py` | Greedy construction and local search for large requests |
-| `dcp_pipeline.py` | Dispatch, deadlines, fallback, response assembly |
+| `dcp_search.py` | Greedy construction and simulated annealing for large requests |
+| `dcp_pipeline.py` | Dispatch, deadlines, hard time guard, fallback, response assembly |
 | `tests/` | Regression tests, an independent checker, a brute-force oracle, request generators |
-| `tools/` | Recorded-run script, results checker, packaging scripts |
+| `tools/` | Recorded-run script, results checker, packaging scripts, search tuning script |
 | `benchmark_runner.py` | The supplied recorder, unchanged |
 | `benchmark_inputs.json` | The supplied public corpus (28 requests), unchanged |
 | `director_session.json` | The supplied sample session, unchanged |
@@ -54,7 +54,7 @@ Expected stdout, one line (the sample has 7 active cards, so the exact method ru
 
 One diagnostic line goes to stderr, for example `context_solver: method=exact active=7 proven=True elapsed_ms=31`. The elapsed time varies.
 
-Run the local regression suite (about 100 seconds on the development machine; it needs no Docker and no network):
+Run the local regression suite. It passes from the extracted archive, needs no Docker and no network, and runs about 340 tests in about 100 seconds on the development machine:
 
 ```sh
 python3.11 -m unittest discover -s tests
@@ -65,6 +65,8 @@ Check the shipped recorded results against the corpus with the independent check
 ```sh
 python3.11 tools/check_results.py .
 ```
+
+`check_results.py` checks the observation schema, the recorder and corpus hashes, both source inventories (`python_sources_before`, `python_sources_after`) and the entry-point hash. It re-parses each record's raw `stdout` the way the recorder does and judges that object with the independent checker. The optional certificate and consistency capabilities are reported in their own sections and never change the core `RESULT` line or the exit code.
 
 Repeat the recorded run in Docker. The script refuses a directory that already holds `benchmark_results.json`, so copy the package without the two recorder output files first:
 
@@ -88,17 +90,25 @@ Without Docker, the same recorder runs directly on the host. This exercises the 
 python3.11 tools/check_results.py ../rerun --allow-wrong
 ```
 
-`tools/build_package.py` and `tools/make_zip.py` produced this archive from the development repository. `build_package.py` reads the supplied files from the repository layout and is not meant to be run from the extracted archive.
+`tools/build_package.py` and `tools/make_zip.py` produced this archive from the development repository. `build_package.py` copies the three supplied files from a `resources/` directory under `--source` (default: the parent of `tools/`). The extracted archive has no `resources/` directory, so the script stops there with a `missing supplied file` error and cannot be run from the extracted archive.
+
+The final build ran `build_package.py --verify-results`. That mode requires the results file, the run log and the README, and refuses the build unless every packaged `*.py` matches the recorder's `python_sources_after`. The package includes the durable files of `.claude-hve-tracking/`, without any Python file from that folder.
 
 ## Method
 
 ### Process boundary (`context_solver.py`)
 
-The entry point records `time.perf_counter()` before any other import; every deadline below is measured from that moment. It reads at most 16 MiB plus one byte from stdin and discards the rest, writes exactly one JSON line to stdout, writes one diagnostic line to stderr (`method`, `active`, `proven`, `elapsed_ms`), and always exits 0. If anything fails before a response exists, it prints `{"status":"invalid","reason":"internal error"}`.
+The entry point records `time.perf_counter()` before any other import; every deadline below is measured from that moment. It reads at most 16 MiB plus one byte from stdin and then stops: bytes past the limit are never read or drained, so an oversized request is answered `invalid` even when the producer keeps the pipe open. It writes exactly one JSON line to stdout and one diagnostic line to stderr (`method`, `active`, `proven`, `elapsed_ms`). If anything fails before a response exists, it prints `{"status":"invalid","reason":"internal error"}`.
+
+The exit code is 0 whenever the response line was written. It is 1 only when the write or flush of that line to stdout fails, because an undelivered response is a failure.
 
 ### Validation (`dcp_validate.py`)
 
-The request is rejected as `invalid`, with a short ASCII reason, when it breaks any input rule of the contract. Nothing is repaired, defaulted or dropped. Checks include: size at most 16 MiB (`MAX_BYTES`), strict UTF-8, no byte order mark, exactly one JSON object with nothing after it, no duplicate object keys, no fractional, exponent or non-finite numbers, booleans not accepted as integers, exactly the seven top-level keys, exact key sets for versions and cards (`text` optional), identifier syntax, every count and range limit in the contract table, unique IDs, existing references, an acyclic version graph, supersession only over a strict ancestor version, and distinct unordered contradiction pairs with no self-pair. Validation runs before any feasibility test, so `invalid` takes precedence over `infeasible`.
+The request is rejected as `invalid`, with a short ASCII reason, when it breaks any input rule of the contract. Nothing is repaired, defaulted or dropped. Checks include: size at most 16 MiB (`MAX_BYTES`), strict UTF-8, no byte order mark, exactly one JSON object with nothing after it, no duplicate object keys, no fractional, exponent or non-finite numbers, booleans not accepted as integers, no lone surrogate in a card's `text`, exactly the seven top-level keys, exact key sets for versions and cards (`text` optional), identifier syntax, every count and range limit in the contract table, unique IDs, existing references, an acyclic version graph, supersession only over a strict ancestor version, and distinct unordered contradiction pairs with no self-pair. Validation runs before any feasibility test, so `invalid` takes precedence over `infeasible`.
+
+Structurally impossible input is rejected before it is decoded or parsed: the raw bytes are counted, and a request with more commas, brackets and braces, quotes or colons than any valid request can contain is `invalid`. This bounds the memory the parser can be made to use.
+
+`-0` is integer notation and is accepted as integer zero wherever zero is in range.
 
 ### Model (`dcp_model.py`)
 
@@ -110,10 +120,12 @@ The request is rejected as `invalid`, with a short ASCII reason, when it breaks 
 |---|---|---|---|
 | Request is in the certificate profile | Exact 0/1 knapsack, then a certificate | 2.5 s | `LARGE_DEADLINE_S` |
 | At most 24 active cards | Exact branch and bound | 3.5 s | `EXACT_MAX_ACTIVE`, `EXACT_DEADLINE_S` |
-| 25 to 64 active cards | Local search until 1.0 s, then exact branch and bound seeded with that result until 2.5 s | 1.0 s, 2.5 s | `MID_EXACT_MAX_ACTIVE`, `MID_SEARCH_DEADLINE_S`, `LARGE_DEADLINE_S` |
-| More than 64 active cards | Greedy construction and local search | 2.5 s | `LARGE_DEADLINE_S` |
+| 25 to 64 active cards | Greedy construction and simulated annealing until 1.0 s, then exact branch and bound seeded with that result until 2.5 s | 1.0 s, 2.5 s | `MID_EXACT_MAX_ACTIVE`, `MID_SEARCH_DEADLINE_S`, `LARGE_DEADLINE_S` |
+| More than 64 active cards | Greedy construction and simulated annealing | 2.5 s | `LARGE_DEADLINE_S` |
 
 The active-card count is the contract's count: after visibility and supersession, before unusable cards are removed. If the profile solver cannot finish in time, the request falls through to the size-based rows.
+
+The deadlines in the table are cooperative: each solver reads the clock itself. A hard guard backs them. It depends on `signal.setitimer`, which Linux and macOS have: there a real-time alarm fires 4.0 s after process start (`HARD_DEADLINE_S`) and interrupts a stage that ignored its deadline. The answer is then the best legal set already held, else the mandatory closure, and the stderr line shows `method=watchdog`.
 
 ### Exact search (`dcp_exact.py`)
 
@@ -127,19 +139,33 @@ The profile is the one the contract defines: every card of the request has an em
 
 ### Large-request search (`dcp_search.py`)
 
-TBD-SEARCH: this module was being reworked when this section was written. The text describes the file as it was then and has to be refreshed against the shipped file.
+`solve_large` builds three greedy solutions on top of the mandatory closure, each adding one card with its closure at a time: best gain per added token, best gain per card that the addition would block, and best plain gain. It keeps the best of the three.
 
-`solve_large` builds three greedy solutions on top of the mandatory closure, each adding one card with its closure at a time: best gain per added token, best gain per card that the addition would block, and best plain gain. It keeps the best of the three. Local search then runs in three slices of the remaining time: from the per-token solution, from the per-blocked-card solution, and for the rest of the time from the best set seen. One move picks a random usable card that is not selected, removes the selected cards that conflict with it together with their dependents, adds the card's closure, sheds sampled cards with the least lost weight per freed token while the set is over budget, and refills greedily. A move that lowers utility is undone. After a run of moves without improvement (between `STALE_MIN` 120 and `STALE_MAX` 600), the search returns to the best set, removes 2 to 5 random units and refills without them. The random generator is seeded with a fixed value (`DEFAULT_SEED`), and the search stops at its deadline.
+Simulated annealing over legal sets then runs until the deadline. One move picks a random usable card that is not selected. If it conflicts with selected cards, a second random card is drawn and the one with fewer conflicts is used. The move removes the selected cards that conflict with the card together with their dependents, adds the card's closure, and, while the set is over budget, sheds the unit with the least lost weight per freed token among `DROP_SAMPLE` (8) sampled cards. A move that would remove a mandatory card is skipped. Every set the search holds is legal.
+
+A move is scored by utility minus a small token price (`LAMBDA`), so that at equal utility the leaner set wins. A move that lowers the score is accepted with a probability that falls as the temperature falls, and is undone otherwise. The temperature cools from `T_HOT` to `T_COLD` over a round of `ROUND_MOVES` (5,000) moves. Each round restarts from the best set seen, refilled greedily.
+
+The function returns the best legal set seen (highest utility, then fewest tokens), checked with `is_legal`; failing that the greedy result, and failing that the mandatory closure. The random generator is `random.Random` seeded with a fixed value (`DEFAULT_SEED`). The search is bounded by the wall clock, not by a move count, so the number of moves varies with machine speed and load and the result is not deterministic between runs.
+
+Evidence, with its limits:
+
+- On the 13 large coupled public requests, each was solved five times at a 2.0 s search deadline: three seeds, and two renamed and shuffled copies. Eleven requests gave one identical value on all five runs. The other two spread by 6 in 54,795 and by 23 in 71,378.
+- An earlier version of the search was bimodal on these requests, for example 61,253 or 73,602 on the same request. That is why it was replaced.
+- Nothing is proven optimal above 64 active cards.
+- No comparison utilities are public, so the 99 percent bar is not measured.
+- On a much slower host fewer moves fit in the time budget and the weaker mode could reappear. It was seen once in 8 seeds when the search was limited to 60,000 moves on one request.
 
 ### Fallback (`dcp_pipeline.py`)
 
-Once the model exists, every failure still produces an `ok` response with a legal set. An exception in a solver is written to stderr and the best legal set found so far is kept. A result is accepted only if `is_legal` passes and its utility is not below the current best. The floor is the mandatory closure, which is legal by construction. The final set is checked with `is_legal` once more before the response is built.
+Once validation and model construction have succeeded, the pipeline answers `ok` with a legal set that is at least the mandatory closure, whatever a solver raises. An exception in a solver is written to stderr and the best legal set found so far is kept. The hard time guard takes the same path. A result is accepted only if `is_legal` passes and its utility is not below the current best. The floor is the mandatory closure, which is legal by construction. The final set is checked with `is_legal` once more before the response is built.
 
-Two paths answer `invalid` for a request that may be valid: an unexpected exception inside validation (`internal error`), and an unexpected exception while building the model (`internal error: model construction failed`). Both would be wrong answers for a valid request. They exist so that the process still returns one well-formed line. Tests force both paths.
+Two paths answer `invalid` for a request that may be valid: an unexpected exception inside validation (`internal error`), and an unexpected exception while building the model (`internal error: model construction failed`). The hard time guard firing before the model exists ends in the same answer. Both would be wrong answers for a valid request. They exist so that the process still returns one well-formed line. Tests force both paths.
+
+A last resort sits behind them: if building the `ok` response fails for the chosen set, for the mandatory closure, and for a helper-free form of the mandatory closure, the answer is `invalid` with `internal error`.
 
 ## Tests
 
-The regression command runs everything in `tests/`.
+The regression command runs everything in `tests/` and passes from the extracted archive.
 
 | File | What it shows |
 |---|---|
@@ -149,57 +175,101 @@ The regression command runs everything in `tests/`.
 | `test_checker_oracle.py` | The checker, oracle and generators against hand-derived values |
 | `test_validate.py` | One accepting and one rejecting case for every input rule |
 | `test_model.py` | Visibility, supersession, closures, conflicts, feasibility, legality |
-| `test_exact.py` | Exact search against the oracle, 24-card stress families, deadline behavior |
+| `test_exact.py` | Exact search against the oracle, 24-card stress families, 24-card requests with a brute-forced reduced core, deadline behavior |
 | `test_profile.py` | Profile detection, exact knapsack against the oracle, certificate validity and the 5% test |
 | `test_search.py` | Large search: legality, quality against the oracle on small requests, return within 50 ms of the deadline, never below the greedy result |
-| `test_differential.py` | 320 generated requests (1 to 14 active cards) through the pipeline against the checker and oracle, and single-rule mutations that must be `invalid` |
-| `test_cli.py` | The process contract (one line, exit 0, any working directory, oversize and garbage input), every fallback path, and contract-maximum requests |
+| `test_differential.py` | 320 generated requests (1 to 14 active cards) through the pipeline against the checker and oracle, 19 to 22 active cards against the oracle, 23 and 24 active cards against a brute-forced reduced core, and single-rule mutations that must be `invalid` |
+| `test_cli.py` | The process contract (one line, exit 0, exit 1 when stdout cannot be written, any working directory, oversize and garbage input), every fallback path, and contract-maximum requests |
 | `test_corpus.py` | The 28 public requests through the CLI: checker verdict for each, oracle equality up to 18 active cards, certificates on profile requests and none elsewhere, host wall time, consistency reported |
 | `test_reference_scenarios.py` | 102 hand-written scenarios (38 `ok`, 8 `infeasible`, 56 `invalid`) through the CLI |
 | `test_tools.py` | The packaging and results tools, without Docker |
 
 ## Results on the public corpus
 
-Source: `benchmark_results.json` and `benchmark_run.log`, written by the unchanged recorder in the environment described below, and summarized by `python3.11 tools/check_results.py .`. Every request is listed, including invalid, infeasible, failed and timed-out ones.
+Source: `benchmark_results.json` and `benchmark_run.log`, written by the unchanged recorder in the environment described below, and summarized by `python3.11 tools/check_results.py .`. Every request is listed, including the invalid and infeasible ones.
 
-Status counts: `ok` TBD-MEASURED, `invalid` TBD-MEASURED, `infeasible` TBD-MEASURED. Failed or timed-out requests: TBD-MEASURED.
+The corpus has 28 requests: 24 answer `ok`, 2 answer `invalid` (`i_93a288225d57a93686`, `i_57be790be38419e246`) and 2 answer `infeasible` (`i_6bf2ce5fc66d4bad9e`, `i_354f04e366ba47a0e5`). There are no timeouts and no malformed responses, and the independent checker accepts every response.
 
-| id | active cards | status | utility | tokens | wall_ms | peak_rss_kib | timed_out | checker verdict |
-|---|---|---|---|---|---|---|---|---|
-| TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED |
+The three small instances equal the brute-force optimum. The three mid instances (36, 48 and 64 active cards) equal optima proven by long exact runs outside the time limit: 5,471, 6,659 and 8,606.
 
-Summary over valid feasible requests with at least 250 active cards (the contract's efficiency scope):
+Every measured number of the recorded run is in the block below.
+
+<!-- BEGIN MEASURED -->
+
+Status counts: `ok` 24, `invalid` 2, `infeasible` 2. Timed out: 0. Records failing the checker: 0 of 28.
+
+| id | active cards | status | utility | tokens | wall ms | peak RSS MiB | checker verdict |
+|---|---|---|---|---|---|---|---|
+| `i_353b0868e8bfb0bb1c` | 3 | ok | 60 | 20 | 110 | 16.6 | pass |
+| `i_d377627acc7b53786a` | 476 | ok | 73602 | 1953 | 2520 | 16.3 | pass |
+| `i_613d784770e53c543d` | 428 | ok | 120 | 1735 | 2590 | 16.3 | pass |
+| `i_6f0cb82b21cc17afba` | 380 | ok | 223 | 1603 | 2510 | 16.3 | pass |
+| `i_93a288225d57a93686` | - | invalid | - | - | 40 | 16.0 | pass |
+| `i_5fccaf00f31313dcfc` | 428 | ok | 111 | 1458 | 2700 | 16.3 | pass |
+| `i_3fa5a35f7c751fc671` | 64 | ok | 8606 | 296 | 2630 | 15.9 | pass |
+| `i_658192e99b3806aff2` | 12 | ok | 1399 | 54 | 70 | 15.9 | pass |
+| `i_5568451c1df999c2c4` | 3 | ok | 70 | 20 | 30 | 15.9 | pass |
+| `i_d755f5d407b0d86c60` | 476 | ok | 136 | 1860 | 2530 | 16.4 | pass |
+| `i_27d35bf2cd22d3769a` | 332 | ok | 49814 | 1367 | 2510 | 16.5 | pass |
+| `i_3b971612ce637e324b` | 476 | ok | 128 | 1719 | 2540 | 16.4 | pass |
+| `i_a7373a7648d6ddce67` | 284 | ok | 40568 | 1150 | 2520 | 16.2 | pass |
+| `i_97504cfbf824b0eeee` | 380 | ok | 54787 | 1337 | 2560 | 16.5 | pass |
+| `i_f4bba5cb9d71569f25` | 2 | ok | 70 | 20 | 30 | 16.0 | pass |
+| `i_4f87def68141976d87` | 48 | ok | 6659 | 215 | 1030 | 15.9 | pass |
+| `i_cf46e9e6258788de2a` | 320 | ok | 58666 | 2571 | 110 | 15.9 | pass |
+| `i_91a2e8f7679a6871f4` | 428 | ok | 120 | 1735 | 2540 | 16.3 | pass |
+| `i_299ba50f55c486ec71` | 16 | ok | 1720 | 75 | 80 | 16.0 | pass |
+| `i_9e24f6f61fea4413ac` | 256 | ok | 78170 | 93 | 150 | 16.1 | pass |
+| `i_9cf7bcb5fe8c0fdac3` | 36 | ok | 5471 | 183 | 1000 | 15.9 | pass |
+| `i_6421fda8c234f4ca23` | 18 | ok | 2617 | 95 | 30 | 15.9 | pass |
+| `i_6bf2ce5fc66d4bad9e` | 3 | infeasible | - | - | 40 | 15.9 | pass |
+| `i_8d29a9554dd222d976` | 476 | ok | 71386 | 1612 | 2610 | 16.4 | pass |
+| `i_57be790be38419e246` | - | invalid | - | - | 100 | 15.9 | pass |
+| `i_354f04e366ba47a0e5` | 3 | infeasible | - | - | 80 | 15.9 | pass |
+| `i_dfcebb3746dc9feecb` | 332 | ok | 49814 | 1367 | 2530 | 16.3 | pass |
+| `i_b05b69c48293a3d4b4` | 476 | ok | 73602 | 1953 | 2540 | 16.3 | pass |
+
+Wall time is rounded to the nearest 10 ms and peak RSS is converted from KiB to MiB with one decimal. The unrounded values are in `benchmark_results.json`.
 
 | Figure | Value |
 |---|---|
-| Requests in scope | TBD-MEASURED |
-| p95 wall time, nearest rank | TBD-MEASURED ms |
-| Maximum peak RSS | TBD-MEASURED KiB |
-| Maximum wall time over all 28 requests | TBD-MEASURED ms |
+| Maximum wall time over all 28 requests | 2699.8 ms |
+| Valid feasible requests with at least 250 active cards | 15 |
+| p95 wall time over those requests, nearest rank | 2699.8 ms |
+| Maximum peak RSS over those requests | 16892 KiB (16.5 MiB) |
 
-Certificates on profile requests:
+With 15 requests in scope the nearest-rank p95 is the largest value. The p95 is above 750 ms and the maximum RSS is under 64 MiB.
 
-| id | `U` | `scale` | utility | `100 * U <= 105 * utility * scale` |
-|---|---|---|---|---|
-| TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED |
+Certificates on the two profile requests. The gap is `(U - utility * scale) / (utility * scale)`:
+
+| id | `U` | `scale` | utility | gap | `100 * U <= 105 * utility * scale` |
+|---|---|---|---|---|---|
+| `i_cf46e9e6258788de2a` | 1759980 | 30 | 58666 | 0.00% | True |
+| `i_9e24f6f61fea4413ac` | 78170 | 1 | 78170 | 0.00% | True |
 
 Consistency on the three public pairs that present the same problem twice (`L` and `H` are the lower and higher utility of the pair):
 
 | Pair | `L` | `H` | `200 * (H - L) <= H` |
 |---|---|---|---|
-| `i_d377627acc7b53786a` / `i_b05b69c48293a3d4b4` | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED |
-| `i_613d784770e53c543d` / `i_91a2e8f7679a6871f4` | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED |
-| `i_27d35bf2cd22d3769a` / `i_dfcebb3746dc9feecb` | TBD-MEASURED | TBD-MEASURED | TBD-MEASURED |
+| `i_d377627acc7b53786a` / `i_b05b69c48293a3d4b4` | 73602 | 73602 | True |
+| `i_613d784770e53c543d` / `i_91a2e8f7679a6871f4` | 120 | 120 | True |
+| `i_27d35bf2cd22d3769a` / `i_dfcebb3746dc9feecb` | 49814 | 49814 | True |
+
+Run of 2026-10-11 14:10 PDT. Recorder `environment.python`: `3.11.17 (main, Oct  6 2026, 02:08:45) [GCC 14.2.0]`. `platform`: `Linux-6.12.54-linuxkit-aarch64-with-glibc2.41`. `cpu_capacity`: `{"affinity_cpus": [0, 1, 2, 3, 4, 5, 6, 7], "cgroup_cpu_max": "200000 100000", "logical_cpus": 8, "quota_vcpus": 2.0}`.
+
+<!-- END MEASURED -->
+
+These are the results of the second of two runs of the unchanged recorder on the same source that day. The first run was taken while the host was running other jobs (load average about 43). Its statuses and utilities were identical; only the timing differed, with one large request at 3.84 s. The shipped `benchmark_results.json` and `benchmark_run.log` are from the second run only.
 
 ## Measurement environment
 
 | Item | Value |
 |---|---|
 | Container image | `python:3.11-slim` |
-| Python | 3.11.17 |
+| Python | 3.11, from the image. The exact version string is the recorder's `environment.python`, quoted in Results |
 | Platform | linux/arm64, Docker Desktop on an Apple-silicon Mac |
-| CPU limit | `--cpus=2`; the recorder stored `cgroup_cpu_max "200000 100000"` and `quota_vcpus 2.0` |
-| Logical CPUs visible in the container | 8 |
+| CPU limit | `--cpus=2`. The recorder stores the cgroup quota as `cpu_capacity`, quoted in Results, and `check_results.py` asserts a quota of 2 vCPUs |
+| Logical CPUs visible in the container | More than 2. See `cpu_capacity` in Results |
 | Network | `--network none` |
 | Memory limit | None on the container. The recorder measures peak RSS per request |
 | Recorder | `benchmark_runner.py`, unchanged, SHA-256 `87694477eca9636ed78766d4473821befb9d388bf2444b2e1b5310f5e6ca5943` |
@@ -214,8 +284,9 @@ The 2-vCPU envelope is met by the cgroup quota, not by the visible CPU count. No
 | Per-request status, selected set, utility, tokens, wall time and peak RSS on the 28 public requests | Measured by the recorder in the environment above |
 | Legality of every recorded `ok` response, and correctness of the recorded `invalid` and `infeasible` statuses | Recomputed by `tools/check_results.py` with the independent checker |
 | Exact maximum utility up to 18 active cards on the corpus and on generated requests | Tested against the brute-force oracle |
-| Exact maximum utility at 19 to 24 active cards | Not verified by brute force: exactness at 19 to 24 active cards has no brute-force oracle. It rests on the branch and bound exhausting its search space (`proven=True` on stderr) |
-| 99% of the comparison utility on larger requests | Not measured. No public comparison utilities exist, so the 99 percent bar cannot be measured here. What stands in for it: legality from the independent checker on every public request, oracle agreement on small generated requests, a result never below the greedy construction, and proven optimality on profile requests |
+| Maximum utility on the three mid public requests (36, 48 and 64 active cards) | Equal to optima proven by long exact runs outside the time limit (5,471, 6,659, 8,606) |
+| Exact maximum utility at 19 to 24 active cards | The public corpus stops at 18 active cards. The test suite compares 12 generated requests of 19 to 22 active cards with the brute-force oracle through the pipeline, and 12 requests of 23 and 24 active cards against brute-forced reduced cores whose optimum is preserved by construction (`tests/test_differential.py`). `tests/test_exact.py` adds 25 independently verified 24-card cases. Not verified: arbitrary 23 and 24-card requests have no full brute-force check, because 2^24 subsets is too slow in the oracle. There the result rests on the branch and bound exhausting its search space (`proven=True` on stderr) |
+| 99% of the comparison utility on larger requests | Not measured. No public comparison utilities exist, so the 99 percent bar cannot be measured here. What stands in for it: legality from the independent checker on every public request, oracle agreement on small generated requests, a result never below the greedy construction, proven optimality on profile requests, and the repeat runs described under "Large-request search" |
 | Behavior on x86-64 | Not measured. There was no x86 run. The recorded run is arm64 |
 | Behavior in any deployment environment | Not verified. No deployment environment was available |
 
@@ -223,21 +294,24 @@ The 2-vCPU envelope is met by the cgroup quota, not by the visible CPU count. No
 
 | Capability | Decision | Notes |
 |---|---|---|
-| Utility upper-bound certificate | Provided on certificate-profile requests only | Omitted when the 5% test does not hold for the returned set, so a response never carries a loose certificate. Recorded result: see the certificate table |
-| 750 ms p95 with 64 MiB maximum RSS | Declined | Large requests outside the profile use their search time up to the 2.5 s deadline by design. Measured anyway: p95 TBD-MEASURED ms, maximum RSS TBD-MEASURED KiB |
-| 99.5% target | Not claimed | It cannot be measured without comparison utilities, and nothing is done differently for it |
-| Consistency across equivalent requests | A tested target, not a guarantee | Result on the public pairs: TBD-MEASURED of 3 pairs satisfy `200 * (H - L) <= H`. See the consistency table |
+| Utility upper-bound certificate | Provided on certificate-profile requests only | Omitted when the 5% test does not hold for the returned set, so a response never carries a loose certificate. Both public profile requests carry a certificate that passes the 5 percent test. See Results |
+| 750 ms p95 with 64 MiB maximum RSS | Declined | Large requests outside the profile use their search time up to the 2.5 s deadline by design, so p95 is far above 750 ms. Maximum RSS is well under 64 MiB. Both figures are in Results |
+| 99.5% target | Not claimed | It cannot be measured without the comparison utilities, and nothing is done differently for it |
+| Consistency across equivalent requests | A tested target, not a guarantee | All three public repeat pairs returned equal utilities in the recorded run. The search is time-bounded and randomized, so equality is observed, not guaranteed. See Results |
 
 ## Limitations
 
 - Above 24 active cards the solver is not deterministic across runs. The search is seeded, but it stops on the wall clock, so the number of moves, and with it the selected set and its utility, depends on machine speed and load. Renaming or reordering an equivalent request also changes the search path.
 - Above 64 active cards and outside the certificate profile there is no optimality proof and no upper bound. The answer is the best legal set the search found in its time.
+- The search quality above 64 active cards depends on how many moves fit before the deadline. On a much slower or heavily loaded host fewer moves fit, and a weaker result than the recorded one is possible.
+- On a constructed 500-card request with a replacement barrier, the annealing schedule stayed at about 93 percent of a known feasible optimum. A hidden request with that shape could miss the 99 percent target.
 - From 25 to 64 active cards the answer is proven optimal only when the exact pass finishes before 2.5 s. Otherwise it is the best set found.
 - At 24 or fewer active cards the answer is exact only when the branch and bound finishes before 3.5 s. If it does not, the response is still `ok` and legal, and the stderr line shows `proven=False`. The response itself does not carry that flag.
 - A hidden request can be harder than any public one. The contract bounds every input structure but promises nothing about topology, and the public corpus is small.
-- Deadlines are fixed constants chosen for the 5 second limit in the measured container. On a much slower machine the margin between the 3.5 s deadline and the 5 s limit shrinks. The exact search reads the clock about once per 4,096 card visits and the local search once per move.
+- Deadlines are fixed constants chosen for the 5 second limit in the measured container. On a much slower machine the margin between the 3.5 s deadline and the 5 s limit shrinks. The exact search reads the clock about once per 4,096 card visits and the annealing once per move.
+- The hard guard at 4.0 s needs `signal.setitimer`, which Windows does not have; there only the cooperative deadlines apply. The guard interrupts Python code that ignores its deadline. It cannot help a process the host does not schedule, and what it interrupts still has to write its answer before 5 s.
 - The certificate bound ignores requirements, groups, pairs and mandatory choices, as the contract defines it. It is provided only where those are absent.
-- The two `internal error` paths described under Fallback would answer `invalid` for a valid request.
+- The `internal error` paths described under Fallback would answer `invalid` for a valid request.
 
 ## How this was built
 
@@ -245,7 +319,7 @@ The work followed HVE (Hypervelocity Engineering) for Claude Code, an adaptation
 
 **Orchestration.** One Claude Code session acted as orchestrator. It split the plan into 11 phases with declared dependencies and owned files, and gave each phase to a separate agent (worker subagents and peer sessions), each in its own git worktree. It verified every delivery itself before the merge: it re-ran each test gate and cross-checked modules against an independent oracle. The orchestrator did not write product code.
 
-**Review.** Every implementation phase landed through its own pull request and was reviewed by a second model (OpenAI Codex) before the owner merged it. Each finding was triaged against the contract and either fixed or declined with the contract clause cited. Three examples, which can be checked in the tracking folder and the pull request history: the validation review led to rejecting lone surrogates in text and to a reasoned decline of rejecting `-0`; the harness review hardened the result-verification tooling; the pipeline review added a hard time guard.
+**Review.** The process, and what the record shows: each implementation phase was opened as its own pull request and reviewed by a second model (OpenAI Codex). Findings were fixed or declined with the reason recorded on the pull request, and the owner merged them. Three examples, which can be checked in the tracking folder and the pull request history: the validation review led to rejecting lone surrogates in text and to a reasoned decline of rejecting `-0`; the harness review hardened the result-verification tooling; the pipeline review added a hard time guard.
 
 **Independent cross-checks.** The public corpus ships no expected outputs. Two things stand in for them: the legality checker and the brute-force oracle in `tests/`, which share no code with the solver, and 102 reference scenarios with expected answers written in a separate session (`tests/data/reference_scenarios.json`).
 
@@ -257,8 +331,8 @@ The work followed HVE (Hypervelocity Engineering) for Claude Code, an adaptation
 | `plans/2026-10-11/director-context-picker-plan.md` | The 11 phases, their dependencies, the optional-capability decisions, and the requirements added during the work |
 | `plans/logs/2026-10-11/director-context-picker-log.md` | Planning discrepancies and design decisions, including the plan validator's findings |
 | `details/2026-10-11/director-context-picker-details.md` | The binding module interfaces the parallel phases coded against |
-| `changes/2026-10-11/director-context-picker-changes.md` | What each phase actually did, with test counts and deviations |
-| `reviews/rpi/2026-10-11/` | The review log and the per-phase validation reports |
+| `changes/2026-10-11/director-context-picker-changes.md` | What each phase did as of packaging, with test counts and deviations |
+| `reviews/rpi/2026-10-11/` | The review log (`director-context-picker-review.md`) and eight validation reports |
 
 Start with the plan, then read the changes log. Citations of the form `file:line` are snapshots as of the date in the path and may be off by a few lines after later edits.
 
