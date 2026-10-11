@@ -16,7 +16,14 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-RESOURCES = REPO / "resources"
+
+
+def supplied(name: str) -> Path:
+    """A supplied file: at the root in the extracted package, under ``resources/`` in the repository."""
+    at_root = REPO / name
+    return at_root if at_root.is_file() else REPO / "resources" / name
+
+
 STUB = 'import sys\nsys.stdin.read()\nprint(\'{"status":"invalid","reason":"stub"}\')\n'
 
 
@@ -37,11 +44,15 @@ def _sha(path: Path) -> str:
 
 
 def _make_source(root: Path) -> Path:
-    """A throwaway source tree with copies of the supplied files and some files that must not ship."""
+    """A throwaway repo-shaped source tree: the supplied files under ``resources/`` plus files that must not ship.
+
+    Built from ``supplied`` so it is the same tree whether the tests run in the
+    repository or in the extracted package (which has no ``resources/`` folder).
+    """
     source = root / "src"
     (source / "resources").mkdir(parents=True)
     for name in build_package.RESOURCE_COPIES:
-        shutil.copyfile(RESOURCES / name, source / "resources" / name)
+        shutil.copyfile(supplied(name), source / "resources" / name)
     (source / "resources" / "task.md").write_text("not shipped\n")
     (source / "context_solver.py").write_text(STUB)
     (source / "dcp_model.py").write_text("X = 1\n")
@@ -60,11 +71,24 @@ def _make_source(root: Path) -> Path:
 
 
 class BuildPackageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # The supplied corpus is large: locate and copy it out of the real tree once per class.
+        cls._class_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._class_tmp.cleanup)
+        cls.template = _make_source(Path(cls._class_tmp.name))
+        cls.supplied_bytes = {name: (cls.template / "resources" / name).read_bytes()
+                              for name in build_package.RESOURCE_COPIES}
+
+    def _new_source(self, root: Path) -> Path:
+        """A private, writable copy of the class's source tree at ``root/src``."""
+        return Path(shutil.copytree(self.template, root / "src"))
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        self.source = _make_source(self.root)
+        self.source = self._new_source(self.root)
         self.out = self.root / "out"
 
     def _packaged(self) -> set[str]:
@@ -72,7 +96,7 @@ class BuildPackageTests(unittest.TestCase):
 
     def test_baseline_matches_repo_resources(self) -> None:
         for name, expected in build_package.RESOURCE_BASELINE.items():
-            self.assertEqual(_sha(RESOURCES / name), expected, name)
+            self.assertEqual(_sha(supplied(name)), expected, name)
         self.assertEqual(check_results.RUNNER_SHA256, build_package.RESOURCE_BASELINE["benchmark_runner.py"])
         self.assertEqual(check_results.INPUTS_SHA256, build_package.RESOURCE_BASELINE["benchmark_inputs.json"])
 
@@ -82,7 +106,8 @@ class BuildPackageTests(unittest.TestCase):
             "context_solver.py", "dcp_model.py", "README.md", "tests/test_a.py", "tests/data/case.json",
             "tools/t.py", "benchmark_runner.py", "benchmark_inputs.json", "director_session.json"})
         for name in build_package.RESOURCE_COPIES:
-            self.assertEqual((self.out / name).read_bytes(), (RESOURCES / name).read_bytes(), name)
+            self.assertEqual((self.out / name).read_bytes(), self.supplied_bytes[name], name)
+            self.assertEqual(self.supplied_bytes[name], supplied(name).read_bytes(), name)
 
     def test_recorder_output_is_copied_when_present(self) -> None:
         (self.source / "benchmark_results.json").write_text("{}\n")
@@ -93,7 +118,7 @@ class BuildPackageTests(unittest.TestCase):
     def test_refuses_on_resource_hash_mismatch(self) -> None:
         for name in build_package.RESOURCE_BASELINE:
             with self.subTest(name=name):
-                source = _make_source(self.root / name)
+                source = self._new_source(self.root / name)
                 with (source / "resources" / name).open("ab") as handle:
                     handle.write(b"\n")
                 out = self.root / name / "out"
@@ -175,7 +200,7 @@ class BuildPackageTests(unittest.TestCase):
                          {"benchmark_results.json", "benchmark_run.log", "README.md"})
         for name in build_package.REQUIRED_FINAL_FILES:
             with self.subTest(missing=name):
-                source = _make_source(self.root / f"no_{name}")
+                source = self._new_source(self.root / f"no_{name}")
                 (source / "benchmark_results.json").write_text(
                     json.dumps({"python_sources_after": self._recorded_sources()}))
                 (source / "benchmark_run.log").write_text("rc=0\n")
@@ -202,7 +227,7 @@ class BuildPackageTests(unittest.TestCase):
     def test_verify_results_rejects_unreadable_inventory(self) -> None:
         for label, text in (("no key", "{}"), ("not json", "{"), ("not an object", '{"python_sources_after": []}')):
             with self.subTest(label=label):
-                source = _make_source(self.root / label.replace(" ", "_"))
+                source = self._new_source(self.root / label.replace(" ", "_"))
                 (source / "benchmark_results.json").write_text(text)
                 (source / "benchmark_run.log").write_text("rc=0\n")
                 out = self.root / label.replace(" ", "_") / "out"
@@ -354,7 +379,7 @@ class CheckResultsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.checker = check_results.load_checker()
-        full = json.loads((RESOURCES / "benchmark_inputs.json").read_text(encoding="utf-8"))
+        full = json.loads(supplied("benchmark_inputs.json").read_text(encoding="utf-8"))
         by_id = {item["id"]: item for item in full["instances"]}
         cls.invalid_id = "i_93a288225d57a93686"
         cls.infeasible_id = "i_6bf2ce5fc66d4bad9e"
@@ -431,7 +456,7 @@ class CheckResultsTests(unittest.TestCase):
         self.assertEqual(set(results["instances"][0]), {"stdout", "stderr", "exit_code", "wall_ms", "peak_rss_kib",
                                                         "timed_out", "id", "input_sha256", "response",
                                                         "response_parse_error"})
-        recorder = (RESOURCES / "benchmark_runner.py").read_text(encoding="utf-8")
+        recorder = supplied("benchmark_runner.py").read_text(encoding="utf-8")
         for key in list(results) + list(results["environment"]) + list(results["instances"][0]):
             self.assertIn(f'"{key}"' if key not in ("id", "input_sha256") else f"{key}=", recorder, key)
 
@@ -669,7 +694,7 @@ class CheckResultsTests(unittest.TestCase):
     def test_main_exit_codes_and_json_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            shutil.copyfile(RESOURCES / "benchmark_inputs.json", run_dir / "benchmark_inputs.json")
+            shutil.copyfile(supplied("benchmark_inputs.json"), run_dir / "benchmark_inputs.json")
             results = self._results(self._good_records())
             (run_dir / "benchmark_results.json").write_text(json.dumps(results), encoding="utf-8")
             out = run_dir / "summary.json"
