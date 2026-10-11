@@ -14,6 +14,15 @@ _MAX_BUDGET = 8192
 _MAX_LINKS = 8
 _MAX_COVERS = 64
 _MAX_PAIRS = 10_000
+_MAX_CARDS = 500
+_MAX_FEATURES = 1024
+_MAX_VERSIONS = 96
+
+
+def _require_range(name: str, value, low: int, high: int) -> None:
+    """Raise ``ValueError`` unless ``value`` is an integer within ``low..high``."""
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise ValueError(f"{name} must be an integer in {low}..{high} (contract limit), got {value!r}")
 
 
 def _strict_ancestors(versions: list) -> dict:
@@ -52,8 +61,23 @@ def _random_pairs(rng, ids: list, count: int) -> list:
 
 def random_request(rng, n_cards, *, n_versions=1, p_requires=0.3, p_group=0.3, n_pairs=None, p_supersede=0.0,
                    n_features=None, max_covers=3, max_tokens=40, budget_ratio=0.5, n_mandatory=0) -> dict:
-    """Always returns a request that satisfies the input contract (valid), feasible or not."""
-    n_versions = max(1, min(n_versions, 96))
+    """Always returns a request that satisfies the input contract (valid), feasible or not.
+
+    Raises ``ValueError`` when an argument asks for more than the contract
+    allows. The budget is capped at 8,192 and the pair count at the number of
+    distinct card pairs.
+    """
+    _require_range("n_cards", n_cards, 0, _MAX_CARDS)
+    _require_range("n_versions", n_versions, 1, _MAX_VERSIONS)
+    if n_features is not None:
+        _require_range("n_features", n_features, 0, _MAX_FEATURES)
+    _require_range("max_covers", max_covers, 0, _MAX_COVERS)
+    _require_range("max_tokens", max_tokens, 1, _MAX_TOKENS)
+    if n_pairs is not None:
+        _require_range("n_pairs", n_pairs, 0, _MAX_PAIRS)
+    _require_range("n_mandatory", n_mandatory, 0, _MAX_CARDS)
+    if not budget_ratio >= 0 or budget_ratio == float("inf"):
+        raise ValueError(f"budget_ratio must be a finite number >= 0, got {budget_ratio!r}")
     versions = []
     for i in range(n_versions):
         k = min(i, rng.randint(1, 2)) if i else 0
@@ -67,8 +91,7 @@ def random_request(rng, n_cards, *, n_versions=1, p_requires=0.3, p_group=0.3, n
     features = {fid: rng.randint(1, 100) for fid in feature_ids}
     group_ids = [f"g{i}" for i in range(max(1, n_cards // 3))]
     card_ids = [f"c{i}" for i in range(n_cards)]
-    max_tokens = max(1, min(max_tokens, _MAX_TOKENS))
-    max_covers = min(max_covers, n_features, _MAX_COVERS)
+    max_covers = min(max_covers, n_features)
 
     cards = []
     for i, cid in enumerate(card_ids):
@@ -95,7 +118,10 @@ def random_request(rng, n_cards, *, n_versions=1, p_requires=0.3, p_group=0.3, n
 
     if n_pairs is None:
         n_pairs = n_cards // 2
-    budget = min(_MAX_BUDGET, int(budget_ratio * sum(c["tokens"] for c in cards)))
+    # Clamp before converting: a finite but enormous ratio makes the product
+    # infinite, and int(inf) raises OverflowError.
+    scaled = budget_ratio * sum(c["tokens"] for c in cards)
+    budget = _MAX_BUDGET if scaled >= _MAX_BUDGET else int(scaled)
     return {
         "versions": versions,
         "cards": cards,
