@@ -2,7 +2,7 @@
 Date: 2026-10-11
 Plan: .claude-hve-tracking/plans/2026-10-11/director-context-picker-plan.md
 Details: .claude-hve-tracking/details/2026-10-11/director-context-picker-details.md
-Status: In Progress (phases 1 to 8 and 10 delivered; phase 9 first run taken, final run pending; phase 11 held for the owner)
+Status: Complete (all 11 phases; see each section)
 Mode: full (`--mode full`): independent phases dispatched in parallel, each `hve-phase-implementor` in its own git worktree; the parent commits each worktree with its issue reference and merges to main. Each implementor edits only its own `### Phase N:` section of this file, in the main checkout, by absolute path.
 Instructions: `~/.claude/instructions/python.md` and `python-tests.md` (global install; no project copy). Where they assume third-party tools (pytest, ruff, uv), the contract's standard-library-only rule wins: tests use `unittest`.
 
@@ -646,17 +646,25 @@ Later: commit 6930369 adds the "How this was built" section and the tracking-fol
 
 
 ### Phase 11: README numbers, ZIP build and clean-extraction check
-Status: Pending
-Started: 
-Completed: 
+Status: Complete (written immediately before the archive was built; the final extraction check is reported by the orchestrator and is not recorded in this file, because this file ships inside the archive)
+Started: 2026-10-11T21:13:00Z
+Completed: 2026-10-11T21:25:00Z
 
 #### Files Modified
+- `README.md` — measured results filled from the shipped recorded run (one delimited block), search, pipeline, validation and tooling sections brought in line with the code after review, external-review accuracy fixes, "How this was built", repository and pull-request tables, "Integrating the picker" (PR #21, merged)
+- `director-context.zip` — built by `tools/build_package.py --verify-results` and `tools/make_zip.py`; gitignored, not committed
 
 #### Steps Completed
+- [x] Step 11.1: README numbers filled from `tools/check_results.py` output and `benchmark_results.json` of the shipped run; `grep -c "TBD-" README.md` is 0.
+- [x] Step 11.2: `python3.11 tools/build_package.py --out <dir> --verify-results` then `python3.11 tools/make_zip.py <dir> director-context.zip`, from `main` with every pull request merged. Dry run at 21:13Z on the same sources: `rc=0`, 47 files packaged, every `.py` hash equal to `python_sources_after`.
+- [x] Step 11.3: on the dry-run package, `python3.11 tools/check_results.py <dir>` gave `RESULT: PASS (0 of 28 records failed, 0 integrity checks failed)`; the regression command passed from a clean extraction of the same sources at 21:00Z (`rc=0`, 337 tests, 0 skipped). The orchestrator repeats both on the extracted final archive.
+- [x] Step 11.4: `director-context.zip` and `gate.log` are gitignored.
 
 #### Issues Encountered
+- Owner hold before the ZIP build (plan, "Requirements added after plan approval") was observed: the build started after the owner had reviewed the README and merged the last pull request.
+- The tracking folder ships in the archive at the owner's request; a GitHub export was started and withdrawn in favor of links to the public repository.
 
-Tests: not run — phase 11 not started
+Tests: 337 passed, 0 failed, 0 skipped (`python3.11 -m unittest discover -s tests`, rc=0, clean package extraction, 21:00Z; no `.py` has changed since)
 
 ---
 
