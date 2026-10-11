@@ -223,3 +223,10 @@ This supersedes the kick-off's "Solo repo, no pull requests ... you integrate to
 - Phase 8 adds `tests/data/reference_scenarios.json` (a byte copy of `docs/reference-scenarios/scenarios.json`) and `tests/test_reference_scenarios.py`: every scenario goes through the CLI (`raw_stdin` verbatim when present, else `request` serialized), exit code 0, `expect.status` matches, and for `ok` the utility equals `expect.utility` and the response passes `tests/checker.py`.
 - Cross-check already run by the orchestrator at 12:59 PDT on `integration` (`5351980`): all 102 scenarios agree with `dcp_validate` (valid versus invalid), `dcp_model` (ok versus infeasible, active set), `tests/checker.py` (feasibility, active set) and `tests/oracle.py` (utility); 400 generated requests (130 infeasible) show 0 disagreements between the model and the checker and oracle. Command: an inline `python3.11` script in the integration worktree; output `reference scenarios: 102 | disagreements: 0` and `random differential: 400 requests, 130 infeasible, 0 disagreements`.
 - The `docs/reference-scenarios/` folder itself is left untracked for its author to commit.
+
+### 2026-10-11 13:01 PDT — hold before the ZIP build; reference scenarios confirmed (owner)
+
+Owner's words: "pause before building the zip so i can review -- we want to resolve as much as possible before shipping, but some minor issues are ok." and, on using `docs/reference-scenarios/` as a second oracle: "yes, this was the intention."
+
+- Phase 11 does not start step 11.2 (package and ZIP build) until the owner says to. Before that point the orchestrator reports: every open PR and its review state, every unresolved Codex and HVE review finding with severity, and the recorded-run results. Critical and Major findings are resolved before the checkpoint where time allows; Minor ones may ship and are listed.
+- The Phase 9 recorded run may happen before the checkpoint; if rework after it changes any `.py`, Phase 9 is repeated before the ZIP.
