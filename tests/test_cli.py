@@ -3,10 +3,13 @@
 import contextlib
 import io
 import json
+import os
 import random
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -26,11 +29,23 @@ SOLVER = ROOT / "context_solver.py"
 OK_KEYS = {"status", "selected", "tokens", "covered", "utility"}
 
 
-def run_cli(raw: bytes, *, cwd=None, argv=None) -> tuple:
-    """Run the solver as a subprocess; return ``(completed process, wall seconds)``."""
+WALL_LIMIT_S = 5.0  # the contract's wall time per invocation, startup included
+HAS_WATCHDOG = hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
+NO_WATCHDOG = "signal.setitimer is unavailable on this platform, so the pipeline has no hard time guard to test"
+
+
+def run_cli(raw: bytes, *, cwd=None, argv=None, stdout=subprocess.PIPE) -> tuple:
+    """Run the solver as a subprocess; return ``(completed process, wall seconds)``.
+
+    Every CLI case goes through here, so every case asserts the contract's wall-time limit.
+    """
     start = time.perf_counter()
-    proc = subprocess.run(argv or [sys.executable, str(SOLVER)], input=raw, capture_output=True, cwd=cwd, timeout=60)
-    return proc, time.perf_counter() - start
+    proc = subprocess.run(argv or [sys.executable, str(SOLVER)], input=raw, stdout=stdout, stderr=subprocess.PIPE,
+                          cwd=cwd, timeout=10)
+    wall = time.perf_counter() - start
+    if wall >= WALL_LIMIT_S:
+        raise AssertionError(f"the CLI took {wall:.3f} s; the limit is {WALL_LIMIT_S} s")
+    return proc, wall
 
 
 def one_object(test: unittest.TestCase, proc) -> dict:
@@ -42,6 +57,13 @@ def one_object(test: unittest.TestCase, proc) -> dict:
     resp = json.loads(out)
     test.assertIsInstance(resp, dict)
     return resp
+
+
+class _Done:
+    """The three fields of a finished process that ``one_object`` reads."""
+
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
 
 
 def encode(request: dict) -> bytes:
@@ -119,6 +141,64 @@ class CliContractTest(unittest.TestCase):
                 self.assertEqual(set(resp), {"status", "reason"})
                 self.assertEqual(resp["status"], "invalid")
                 self.assertTrue(resp["reason"])
+
+    def test_oversize_writer_that_keeps_stdin_open_gets_invalid(self):
+        proc = subprocess.Popen([sys.executable, str(SOLVER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        start = time.perf_counter()
+
+        def feed():
+            try:
+                proc.stdin.write(b" " * (dcp_validate.MAX_BYTES + 1))
+                proc.stdin.flush()
+            except OSError:
+                pass
+
+        writer = threading.Thread(target=feed, daemon=True)
+        writer.start()
+        try:
+            try:
+                proc.wait(timeout=10)  # stdin is still open here: the answer must not wait for EOF
+            except subprocess.TimeoutExpired:
+                self.fail("no response while the writer keeps stdin open")
+            wall = time.perf_counter() - start
+            out = proc.stdout.read()
+            proc.stdout.close()
+            resp = one_object(self, _Done(proc.returncode, out, proc.stderr.read()))
+            self.assertEqual(set(resp), {"status", "reason"})
+            self.assertEqual(resp["status"], "invalid")
+            self.assertLess(wall, WALL_LIMIT_S)
+        finally:
+            proc.kill()
+            writer.join(timeout=10)
+            for stream in (proc.stdin, proc.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            proc.wait()
+
+    def test_closed_stdout_exits_non_zero(self):
+        read_end, write_end = os.pipe()
+        os.close(read_end)  # nobody will ever read: the child's write fails with a broken pipe
+        try:
+            proc, _ = run_cli(session_bytes(), stdout=write_end)
+        finally:
+            os.close(write_end)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(b"could not write the response to stdout", proc.stderr)
+
+    def test_missing_stdout_exits_non_zero(self):
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(ROOT)!r})\n"
+            "sys.stdout = None\n"
+            "import context_solver\n"
+            "sys.exit(context_solver.main())\n"
+        )
+        proc, _ = run_cli(session_bytes(), argv=[sys.executable, "-c", code])
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, b"")
 
     def _inject(self, prelude: str) -> dict:
         code = (
@@ -224,6 +304,97 @@ class FallbackTest(unittest.TestCase):
 
     def test_run_never_raises_on_non_bytes(self):
         self.assertEqual(quiet_run(None)["status"], "invalid")
+
+
+def _sleeper(*args, **kwargs):
+    """A solver that ignores its deadline."""
+    time.sleep(6)
+    raise AssertionError("the watchdog did not interrupt the sleeping solver")
+
+
+@unittest.skipUnless(HAS_WATCHDOG, NO_WATCHDOG)
+class HardDeadlineTest(unittest.TestCase):
+    """A solver that ignores its deadline is interrupted; the answer is the best legal set already held."""
+
+    LIMIT_S = 4.6
+
+    def _timed(self, request: dict) -> dict:
+        start = time.perf_counter()
+        resp = quiet_run(encode(request))
+        wall = time.perf_counter() - start
+        self.assertLess(wall, self.LIMIT_S)
+        self.assertGreater(wall, 3.0, "the solver was not reached, so the watchdog was not exercised")
+        self.assertEqual(resp["status"], "ok")
+        self.assertEqual(checker.check_response(request, resp), [])
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0.0)
+        return resp
+
+    def _mandatory(self, request: dict) -> list:
+        return sorted(checker.requires_closure(request, request["mandatory"]))
+
+    def test_sleeping_exact_solver(self):
+        request = json.loads(session_bytes())
+        with mock.patch.object(dcp_exact, "solve_exact", side_effect=_sleeper):
+            resp = self._timed(request)
+        self.assertEqual(resp["selected"], self._mandatory(request))
+        self.assertEqual(dcp_pipeline.LAST_DIAG["method"], "watchdog")
+
+    def test_sleeping_large_solver(self):
+        request = FallbackTest()._request(120)
+        with mock.patch.object(dcp_search, "solve_large", side_effect=_sleeper):
+            resp = self._timed(request)
+        self.assertEqual(resp["selected"], self._mandatory(request))
+
+    def test_sleeping_profile_solver(self):
+        import dcp_profile
+
+        request = gen.random_request(random.Random(4), 10, p_requires=0.0, p_group=0.0, n_pairs=0, max_covers=1)
+        with mock.patch.object(dcp_profile, "solve_profile", side_effect=_sleeper):
+            resp = self._timed(request)
+        self.assertEqual(resp["selected"], self._mandatory(request))
+
+    def test_sleeping_exact_solver_keeps_the_earlier_search_result(self):
+        request = FallbackTest()._request(40)
+        problem = dcp_model.build_problem(dcp_validate.validate_request(encode(request)))
+        expected = dcp_search.solve_large(problem, time.perf_counter() + 0.2)
+        with mock.patch.object(dcp_search, "solve_large", return_value=expected), \
+                mock.patch.object(dcp_exact, "solve_exact", side_effect=_sleeper):
+            resp = self._timed(request)
+        self.assertEqual(resp["selected"], dcp_model.mask_ids(problem, expected))
+
+
+class ResponseConstructionTest(unittest.TestCase):
+    """Once the model exists, a failure while writing down the answer never changes ``ok`` to ``invalid``."""
+
+    def test_mask_ids_failing_once_still_answers_ok(self):
+        real = dcp_model.mask_ids
+        calls = []
+
+        def flaky(p, mask):
+            calls.append(mask)
+            if len(calls) == 1:
+                raise MemoryError("injected")
+            return real(p, mask)
+
+        request = json.loads(session_bytes())
+        with mock.patch.object(dcp_model, "mask_ids", side_effect=flaky):
+            resp = quiet_run(session_bytes())
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(resp["status"], "ok")
+        self.assertEqual(set(resp), OK_KEYS)
+        self.assertEqual(checker.check_response(request, resp), [])
+
+    def test_every_helper_failing_still_answers_ok_with_the_mandatory_closure(self):
+        request = FallbackTest()._request(12)
+        boom = MemoryError("injected")
+        with mock.patch.object(dcp_model, "mask_ids", side_effect=boom), \
+                mock.patch.object(dcp_model, "fmask_ids", side_effect=boom), \
+                mock.patch.object(dcp_model, "mask_tokens", side_effect=boom):
+            resp = quiet_run(encode(request))
+        self.assertEqual(resp["status"], "ok")
+        self.assertEqual(set(resp), OK_KEYS)
+        self.assertEqual(checker.check_response(request, resp), [])
+        self.assertEqual(resp["selected"], sorted(checker.requires_closure(request, request["mandatory"])))
 
 
 class ContractMaximumTest(unittest.TestCase):
