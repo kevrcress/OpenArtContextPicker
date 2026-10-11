@@ -340,13 +340,12 @@ The tracking files are working records written under a deadline. Where a later s
 
 The tracking folder holds the summaries. The full discussion (issue comments, review text, inline comments) is on GitHub, at the links in the next two subsections.
 
-### Repository, issues and board
+### Repository, issues and pull requests
 
 | What | Link | What it holds |
 |---|---|---|
 | Repository | <https://github.com/kevrcress/OpenArtContextPicker> | Source history; the ZIP is built from it |
 | Issues | <https://github.com/kevrcress/OpenArtContextPicker/issues?q=is%3Aissue> | One parent issue and one issue per plan phase (11), each with the files the phase owns, its success criteria, and comments recording who claimed it, what was delivered and the gate result |
-| Board | <https://github.com/users/kevrcress/projects/5> | The phase issues and pull requests by status (Backlog, Ready, In progress, In review, Done) |
 | Pull requests | <https://github.com/kevrcress/OpenArtContextPicker/pulls?q=is%3Apr> | One per phase plus three follow-ups; each carries the external review and a disposition comment |
 
 ### Pull requests and their reviews
