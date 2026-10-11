@@ -315,7 +315,7 @@ The 2-vCPU envelope is met by the cgroup quota, not by the visible CPU count. No
 
 ## How this was built
 
-The work followed HVE (Hypervelocity Engineering) for Claude Code, an adaptation of [microsoft/hve-core](https://github.com/microsoft/hve-core). The method separates four phases: Research, Plan, Implement, Review. Each phase writes a durable file, and the next phase reads that file from disk, not from chat. Each separation has a purpose. The research phase cannot write code, so it works toward verified facts. The plan fixes interfaces and file ownership before any code exists. The review validates the result against the plan.
+The work followed [HVE for Claude Code (hve-claude)](https://github.com/kevrcress/hve-claude), a Hypervelocity Engineering method adapted from Microsoft's hve-core. The method separates four phases: Research, Plan, Implement, Review. Each phase writes a durable file, and the next phase reads that file from disk, not from chat. Each separation has a purpose. The research phase cannot write code, so it works toward verified facts. The plan fixes interfaces and file ownership before any code exists. The review validates the result against the plan.
 
 **Orchestration.** One Claude Code session acted as orchestrator. It split the plan into 11 phases with declared dependencies and owned files, and gave each phase to a separate agent (worker subagents and peer sessions), each in its own git worktree. It verified every delivery itself before the merge: it re-ran each test gate and cross-checked modules against an independent oracle. The orchestrator did not write product code.
 
@@ -337,6 +337,37 @@ The work followed HVE (Hypervelocity Engineering) for Claude Code, an adaptation
 Start with the plan, then read the changes log. Citations of the form `file:line` are snapshots as of the date in the path and may be off by a few lines after later edits.
 
 The tracking files are working records written under a deadline. Where a later step proved an earlier statement wrong, the file carries a dated correction, not a silent rewrite.
+
+The tracking folder holds the summaries. The full discussion (issue comments, review text, inline comments) is on GitHub, at the links in the next two subsections.
+
+### Repository, issues and board
+
+| What | Link | What it holds |
+|---|---|---|
+| Repository | <https://github.com/kevrcress/OpenArtContextPicker> | Source history; the ZIP is built from it |
+| Issues | <https://github.com/kevrcress/OpenArtContextPicker/issues?q=is%3Aissue> | One parent issue and one issue per plan phase (11), each with the files the phase owns, its success criteria, and comments recording who claimed it, what was delivered and the gate result |
+| Board | <https://github.com/users/kevrcress/projects/5> | The phase issues and pull requests by status (Backlog, Ready, In progress, In review, Done) |
+| Pull requests | <https://github.com/kevrcress/OpenArtContextPicker/pulls?q=is%3Apr> | One per phase plus three follow-ups; each carries the external review and a disposition comment |
+
+### Pull requests and their reviews
+
+Each pull request was reviewed by a second model, OpenAI Codex, which posted its findings on the pull request; each finding was either fixed on the branch or declined with the reason recorded there.
+
+| PR | What it adds | Codex review and outcome |
+|---|---|---|
+| [14](https://github.com/kevrcress/OpenArtContextPicker/pull/14) | Phase 1: strict input validation (`dcp_validate.py`) | Two findings. Lone surrogates in card text accepted: fixed. `-0` accepted as integer zero: declined with the contract clause; the re-review agreed. |
+| [13](https://github.com/kevrcress/OpenArtContextPicker/pull/13) | Phase 2: bitmask model and legality core (`dcp_model.py`) | No findings; the reviewer compared 3,000 generated requests against its own checker. |
+| [15](https://github.com/kevrcress/OpenArtContextPicker/pull/15) | Phase 3: independent legality checker, brute-force oracle, request generators (`tests/`) | Three rounds. The generator accepted out-of-range arguments and overflowed on a huge budget ratio: both fixed. No checker bypass or oracle disagreement found. |
+| [17](https://github.com/kevrcress/OpenArtContextPicker/pull/17) | Phase 4: packaging, Docker benchmark harness, result checker (`tools/`) | Three rounds. Round 1: 2 Critical, 3 Major, 1 Minor in the verification tooling, all fixed. Round 2: four items still open plus one new Major, all fixed. Round 3: one Major about how the optional consistency verdict treats "retained main quality", declined in code and stated under Limitations. |
+| [18](https://github.com/kevrcress/OpenArtContextPicker/pull/18) | Phase 5: exact search for 24 or fewer active cards (`dcp_exact.py`) | No Critical or Major; bounds and branching checked against exhaustive enumeration on about 53,000 requests. Two Minor test gaps fixed (25 independently verified 24-card cases, cutoff assertions). |
+| [19](https://github.com/kevrcress/OpenArtContextPicker/pull/19) | Phase 6: search for larger requests (`dcp_search.py`) | First delivery was reworked before review because results varied between runs. Review of the rework: no illegal result or bookkeeping error; one Critical (a possible overrun of tens to hundreds of milliseconds on a 500-card requirement cycle) and three Major (a constructed barrier instance at 93 percent of a known optimum; two test gaps), declined for this submission and stated under Limitations. |
+| [16](https://github.com/kevrcress/OpenArtContextPicker/pull/16) | Phase 7: exact knapsack and certificate for the certificate profile (`dcp_profile.py`) | No Critical or Major; 5,000 random profile requests legal, optimal and with valid certificates. One Minor test gap fixed. |
+| [20](https://github.com/kevrcress/OpenArtContextPicker/pull/20) | Phase 8: CLI, pipeline and end-to-end regression (`context_solver.py`, `dcp_pipeline.py`) | Round 1: 4 Critical and 2 Major, all fixed (no draining of oversized stdin, hard 4.0 s time guard, guarded response construction, non-zero exit when stdout cannot be written, wall-time assertions, exactness tests at 19 to 24 active cards). Re-review: two further findings that need stdin withheld for four seconds or `json.dumps` to fail, declined as unreachable in a real invocation. |
+| [21](https://github.com/kevrcress/OpenArtContextPicker/pull/21) | Phase 10: this README | 4 Major and 2 Minor accuracy findings, all fixed. |
+| [22](https://github.com/kevrcress/OpenArtContextPicker/pull/22) | Follow-up: tests find the supplied files at the package root | No issues. |
+| [23](https://github.com/kevrcress/OpenArtContextPicker/pull/23) | Follow-up: reject structurally impossible input before parsing | No Critical or Major; the reviewer found no valid request that trips a cap. One Minor test gap, not fixed. |
+
+Phases 9 (the recorded run) and 11 (this package) produce data and an archive, not code, and have no pull request. The repository's default branch also holds the tracking files, which were committed directly.
 
 ## Operational note
 
