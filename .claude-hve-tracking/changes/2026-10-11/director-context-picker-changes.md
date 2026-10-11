@@ -2,7 +2,7 @@
 Date: 2026-10-11
 Plan: .claude-hve-tracking/plans/2026-10-11/director-context-picker-plan.md
 Details: .claude-hve-tracking/details/2026-10-11/director-context-picker-details.md
-Status: In Progress
+Status: In Progress (phases 1 to 8 and 10 delivered; phase 9 first run taken, final run pending; phase 11 held for the owner)
 Mode: full (`--mode full`): independent phases dispatched in parallel, each `hve-phase-implementor` in its own git worktree; the parent commits each worktree with its issue reference and merges to main. Each implementor edits only its own `### Phase N:` section of this file, in the main checkout, by absolute path.
 Instructions: `~/.claude/instructions/python.md` and `python-tests.md` (global install; no project copy). Where they assume third-party tools (pytest, ruff, uv), the contract's standard-library-only rule wins: tests use `unittest`.
 
@@ -16,35 +16,41 @@ Status: Complete
 Started: 2026-10-11T19:53:23Z
 Completed: 2026-10-11T19:57:51Z
 
-Uncommitted in worktree `.claude/worktrees/agent-a947c80b3307c0474` (branch `worktree-agent-a947c80b3307c0474`); the parent commits and merges.
+Uncommitted in worktree `.claude/worktrees/agent-a947c80b3307c0474` (branch `worktree-agent-a947c80b3307c0474`); the parent commits and merges. (superseded — see Correction 2026-10-11)
 
 #### Files Modified
-- `dcp_validate.py:1` — new, 296 lines. `MAX_BYTES` (`dcp_validate.py:12`), `InvalidRequest` (`dcp_validate.py:37`), `validate_request(raw: bytes) -> dict` (`dcp_validate.py:271`). Standard library only (`json`, `re`); imports no other `dcp_*` module.
-- `tests/test_validate.py:1` — new, 722 lines, 86 `unittest` test methods in 9 classes. No `__init__.py` created.
-- `.claude-hve-tracking/changes/2026-10-11/director-context-picker-changes.md:14` — this section, written in the WORKTREE copy (see Issues Encountered).
+- `dcp_validate.py:1` — new, 296 lines. `MAX_BYTES` (`dcp_validate.py:12`), `InvalidRequest` (`dcp_validate.py:37`), `validate_request(raw: bytes) -> dict` (`dcp_validate.py:271`). Standard library only (`json`, `re`); imports no other `dcp_*` module. (superseded — see Correction 2026-10-11)
+- `tests/test_validate.py:1` — new, 722 lines, 86 `unittest` test methods in 9 classes. No `__init__.py` created. (superseded — see Correction 2026-10-11)
+- `.claude-hve-tracking/changes/2026-10-11/director-context-picker-changes.md:14` — this section, written in the WORKTREE copy (see Issues Encountered). (superseded — see Correction 2026-10-11)
 
 #### Steps Completed
-- [x] Step 1.1: `InvalidRequest` and `validate_request` per details section 2 — `dcp_validate.py:37`, `dcp_validate.py:271`. Size check before decode (`dcp_validate.py:108`), strict UTF-8 decode, BOM rejection, `raw_decode` from the first non-whitespace index with a JSON-whitespace-only tail check (`dcp_validate.py:107`); decoder hooks for duplicate keys, float notation and non-finite constants (`dcp_validate.py:62`); version graph by Kahn's algorithm with strict-ancestor bitmasks (`dcp_validate.py:126`); features, cards (two passes so forward card references work), supersession ancestry (`dcp_validate.py:189`); contradictions with unordered-pair dedup (`dcp_validate.py:235`); catch-all conversion to `InvalidRequest` (`dcp_validate.py:295`).
+- [x] Step 1.1: `InvalidRequest` and `validate_request` per details section 2 — `dcp_validate.py:37`, `dcp_validate.py:271`. Size check before decode (`dcp_validate.py:108`), strict UTF-8 decode, BOM rejection, `raw_decode` from the first non-whitespace index with a JSON-whitespace-only tail check (`dcp_validate.py:107`); decoder hooks for duplicate keys, float notation and non-finite constants (`dcp_validate.py:62`); version graph by Kahn's algorithm with strict-ancestor bitmasks (`dcp_validate.py:126`); features, cards (two passes so forward card references work), supersession ancestry (`dcp_validate.py:189`); contradictions with unordered-pair dedup (`dcp_validate.py:235`); catch-all conversion to `InvalidRequest` (`dcp_validate.py:295`). (superseded — see Correction 2026-10-11)
 - [x] Step 1.2: tests for every rule listed in the plan step, accepting and rejecting — `tests/test_validate.py:1`. The step 1.1 parser assumption [MEDIUM] is pinned by `test_json_decoder_python_defaults_pinned` and now holds as [HIGH] on the host's `python3.11`: `parse_float` receives `1.0` and `1e2`, `parse_constant` receives `NaN`/`Infinity`/`-Infinity`, default `json.loads` keeps the last duplicate key, a 5,000-digit literal raises `ValueError`, 100,000-deep nesting raises `RecursionError`.
 - [x] Step 1.3: gate run as `python3.11 -m unittest discover -s tests -p 'test_validate.py' -v > gate.log 2>&1; echo rc=$?` — final run `rc=0`.
 
 #### Issues Encountered
-- Changes-log location: the brief said to edit this section in the MAIN checkout by absolute path. The Edit tool refused that path ("This agent is isolated in the worktree ... Edit the worktree copy of this file instead of the shared-checkout path"). I did not work around the guard through the shell. This section therefore exists only in the worktree copy, uncommitted; the main checkout's Phase 1 section still reads `Status: Pending` until the parent carries this section over.
+- Changes-log location: the brief said to edit this section in the MAIN checkout by absolute path. The Edit tool refused that path ("This agent is isolated in the worktree ... Edit the worktree copy of this file instead of the shared-checkout path"). I did not work around the guard through the shell. This section therefore exists only in the worktree copy, uncommitted; the main checkout's Phase 1 section still reads `Status: Pending` until the parent carries this section over. (superseded — see Correction 2026-10-11)
 - First gate run: `rc=1`, 86 run, 3 errors. All three were bugs in my own test fixtures, not validator behavior, and no rule expectation was changed: (1) the "good identifier" list used card id `a`, which collides with the base fixture's card `a` (correctly rejected as a duplicate id) — changed to `Z`; (2) and (3) `big_request()` made card `i` supersede card `i - 96`, which sits in the same version (correctly rejected) — changed to card `i - 1` for `i % 96 != 0`, a strict ancestor in the version chain. Second run `rc=0`.
 - The details file and the contract did not disagree on any rule I implemented; no DR- entry.
 - No instructions-file gap: `~/.claude/instructions/python.md` and `python-tests.md` were read; their third-party parts (`uv`, `ruff`, `pytest`, 3.12 target) were not applied, per the phase brief (Python 3.11 standard library only, `unittest`). Line length 120 kept (0 lines over).
 - Sample-session test looks for `./director_session.json` then `./resources/director_session.json` and SKIPS if neither exists (the details file does not say fail-or-skip for this file, unlike the corpus). In this tree it ran; 0 skipped.
 
 #### Discrepancies & Decisions
-- DD-P1-01 (2026-10-11): `validate_request` passes a `parse_int` hook that rejects integer literals longer than 32 characters before conversion (`dcp_validate.py:49`). Details section 2 relies on the 3.11 default (`ValueError` over 4,300 digits). The accept/reject outcome is identical for every input, because every integer the contract allows is at most 4 digits and an integer anywhere else is a type error; the hook only removes the dependence on the interpreter's `int_max_str_digits` setting. Not a contract change.
-- DD-P1-02 (2026-10-11): input whose first non-whitespace character is not `{` is rejected before JSON parsing (`dcp_validate.py:116`). Same outcome as parsing first (a non-object is invalid either way), without parsing a large non-object document.
+- DD-P1-01 (2026-10-11): `validate_request` passes a `parse_int` hook that rejects integer literals longer than 32 characters before conversion (`dcp_validate.py:49`). Details section 2 relies on the 3.11 default (`ValueError` over 4,300 digits). The accept/reject outcome is identical for every input, because every integer the contract allows is at most 4 digits and an integer anywhere else is a type error; the hook only removes the dependence on the interpreter's `int_max_str_digits` setting. Not a contract change. (superseded — see Correction 2026-10-11)
+- DD-P1-02 (2026-10-11): input whose first non-whitespace character is not `{` is rejected before JSON parsing (`dcp_validate.py:116`). Same outcome as parsing first (a non-object is invalid either way), without parsing a large non-object document. (superseded — see Correction 2026-10-11)
 
 #### Measurements (host `python3.11`, not the recorded Docker run)
 - Corpus one-liner over `resources/benchmark_inputs.json` (28 instances, each `request` re-serialized with `json.dumps`): 26 validate, 2 raise `InvalidRequest` (the two reasons printed were "contradiction pairs a card with itself" and "contradiction must be an array of two card ids"). Whether those 2 are the corpus's intended `invalid` cases was NOT checked against expected statuses here (Phase 8 `tests/test_corpus.py` owns that).
 - Slowest corpus validation: 9.22 ms, single run, for a 477,307-byte request with 488 cards and 6,496 pairs. The brief's 488-card, 7,424-pair instance was not identified separately in this pass; no instance took longer than 9.22 ms.
 - Limit-sized generated request (96 versions, 500 cards, 1,024 features, 10,000 pairs, over 400,000 bytes) and the sample session each validate in under 100 ms (asserted by the two timing tests, best of 5).
 
-Tests: 86 passed, 0 failed (0 skipped) — `python3.11 -m unittest discover -s tests -p 'test_validate.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`, "Ran 86 tests in 0.178s", "OK".
+Tests: 86 passed, 0 failed (0 skipped) — `python3.11 -m unittest discover -s tests -p 'test_validate.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`, "Ran 86 tests in 0.178s", "OK". (superseded — see Correction 2026-10-11)
+
+#### Corrections
+- Correction (2026-10-11): PR #14 is merged and this section is in the main checkout with `Status: Complete`. The three statements that the work is uncommitted in the worktree, that this section exists only in the worktree copy, and that the main checkout reads `Status: Pending` describe the state at landing only.
+- Correction (2026-10-11): rework `32d0751` after the Codex review of PR #14: lone surrogates in card `text` are rejected (`dcp_validate.py:35`, `dcp_validate.py:220-221`; 5 tests at `tests/test_validate.py:574-602`). The plan line that says lone surrogates in `text` are accepted (plan:202) is superseded. The `-0` finding was declined: `-0` stays accepted, per contract line 62. No DD- entry recorded this rework when it landed.
+- Correction (2026-10-11): counts and citations in the validated tree (`af7d928`): `dcp_validate.py` is 299 lines, `tests/test_validate.py` is 758 lines with 91 test methods, and the gate is 91 tests, `rc=0` (parent's run). Citations in this section move by +1 or +3: `InvalidRequest` is `dcp_validate.py:38`; `validate_request` is `dcp_validate.py:274`; `:62` is `:63`; `:107` and `:108` are `:108` and `:109`; `:126` is `:127`; `:189` is `:190`; `:235` is `:238`; `:295` is `:298`; DD-P1-01 `:49` is `:50`; DD-P1-02 `:116` is `:117`.
+- Correction (2026-10-11): PR #23 (`f18f3b9`) later adds structural byte-count caps that reject impossible input before parsing; `tests/test_validate.py` then has 95 tests. The line numbers in the entry above predate that commit.
 
 ---
 
@@ -56,7 +62,7 @@ Status: Complete
 Started: 2026-10-11T19:53:23Z
 Completed: 2026-10-11T19:56:31Z
 
-Work was done in the worktree `.claude/worktrees/agent-ad673c08bd763aad8` and left uncommitted there (untracked: `dcp_model.py`, `tests/test_model.py`; modified: this changes log, Phase 2 section only). Line numbers below are from that worktree copy.
+Work was done in the worktree `.claude/worktrees/agent-ad673c08bd763aad8` and left uncommitted there (untracked: `dcp_model.py`, `tests/test_model.py`; modified: this changes log, Phase 2 section only). Line numbers below are from that worktree copy. (superseded — see Correction 2026-10-11)
 
 #### Files Modified
 - `dcp_model.py:13` — `Infeasible` exception (new file, 367 lines, standard library only)
@@ -71,7 +77,7 @@ Work was done in the worktree `.claude/worktrees/agent-ad673c08bd763aad8` and le
 #### Steps Completed
 - [x] Step 2.1: `Infeasible`, `Problem`, `build_problem` and the mask helpers per details section 3 — `dcp_model.py:13`, `dcp_model.py:18`, `dcp_model.py:180`, `dcp_model.py:305`
 - [x] Step 2.2: Tests for every case the step lists — `tests/test_model.py:1`. Merge head and invisible branch (`TestVisibility`); chain, superseded superseder, invisible superseder (`TestSupersession`); requires on inactive or invisible card, cycle, self-requirement, shared requirement charged once, 500-deep chain (`TestClosures`); pair or same group inside a closure, inert pair with inactive endpoint, no transfer to a successor, non-transitivity (`TestConflicts`); mandatory inactive, invisible, pair in closure, same group, over budget, exact budget, empty mandatory at budget 0 (`TestMandatory`); one rejection per contract condition 1 to 6 (`TestIsLegal`); sample session numbers (`TestSampleSession`)
-- [x] Step 2.3: Timing on `resources/benchmark_inputs.json` instance `i_3b971612ce637e324b` (488 cards, 7,424 pairs, 476 active, 475 usable): `build_problem` min 3.05 ms, median 3.25 ms, max 5.08 ms over 25 in-process runs on the host with `python3.11` and `time.perf_counter`. Target was under 60 ms. Worst single first-call build over all 28 public instances: 3.78 ms. The corpus was read only, loaded inside a `python3.11 -c` one-liner
+- [x] Step 2.3: Timing on `resources/benchmark_inputs.json` instance `i_3b971612ce637e324b` (488 cards, 7,424 pairs, 476 active, 475 usable): `build_problem` min 3.05 ms, median 3.25 ms, max 5.08 ms over 25 in-process runs on the host with `python3.11` and `time.perf_counter`. Target was under 60 ms. Worst single first-call build over all 28 public instances: 3.78 ms. The corpus was read only, loaded inside a `python3.11 -c` one-liner (superseded — see Correction 2026-10-11)
 - [x] Step 2.4: Gate `python3.11 -m unittest discover -s tests -p 'test_model.py' -v > gate.log 2>&1; echo rc=$?` printed `rc=0`; `gate.log` reads `Ran 55 tests in 0.031s` and `OK`
 
 #### Sample session facts pinned in tests
@@ -93,6 +99,11 @@ Work was done in the worktree `.claude/worktrees/agent-ad673c08bd763aad8` and le
 
 Tests: 55 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_model.py' -v`, rc=0)
 
+#### Corrections
+- Correction (2026-10-11): PR #13 is merged; the Codex review found no issues. The statement that the files were left uncommitted in the worktree describes the state at landing only. Both files are in the merged tree (`af7d928`) at the same line numbers (`dcp_model.py:13`, `tests/test_model.py:1`).
+- Correction (2026-10-11): step 2.3's "Worst single first-call build over all 28 public instances: 3.78 ms" covers 28 calls, of which 25 completed a build: one raises `ValueError` and two raise `Infeasible` (see Issues Encountered).
+- Correction (2026-10-11): PR #22 (`a9bace3`) changes how `tests/test_model.py` finds the sample session, so the test also runs from the package layout. Line numbers in `tests/test_model.py` after that commit were not re-derived here.
+
 ---
 
 <!-- end of phase 2 section; do not edit below this line from phase 2 -->
@@ -108,13 +119,13 @@ Work was done in worktree `.claude/worktrees/agent-a36fe6f91b2ba87e3` (branch `w
 #### Files Modified
 - `tests/checker.py:1` — new, 280 lines. `visible_versions` (`:23`), `active_cards` (`:36`), `requires_closure` (`:55`), `legality_errors` (`:69`, the six conditions, messages prefixed `condition N:`), `expected_feasible` (`:103`), `response_for` (`:109`), `certificate_errors` (`:146`, messages prefixed `certificate:`), `check_response` (`:178`), `certificate_bound` (`:247`), `is_certificate_profile` (`:264`). Sets and dicts on the raw request; explicit stacks, no recursion.
 - `tests/oracle.py:1` — new, 100 lines. `best_set` (`:13`) and `best_utility` (`:95`). Explicit-stack include/exclude enumeration over active cards with its own closure, group, pair, budget and mandatory tests; takes only the active set from `checker`.
-- `tests/gen.py:1` — new, 224 lines. `random_request` (`:53`), `max_request` (`:110`), `permute_request` (`:182`).
-- `tests/test_checker_oracle.py:1` — new, 560 lines, 45 `unittest` tests, including its own structural input-contract validator `assert_valid_request` so the generators are not their own judge.
+- `tests/gen.py:1` — new, 224 lines. `random_request` (`:53`), `max_request` (`:110`), `permute_request` (`:182`). (superseded — see Correction 2026-10-11)
+- `tests/test_checker_oracle.py:1` — new, 560 lines, 45 `unittest` tests, including its own structural input-contract validator `assert_valid_request` so the generators are not their own judge. (superseded — see Correction 2026-10-11)
 
 #### Steps Completed
 - [x] Step 3.1: `checker.py` per details section 4, written from the contract text (lines 80-145), with sets and dicts — `tests/checker.py:1`
 - [x] Step 3.2: `oracle.py` exhaustive search over subsets of active cards — `tests/oracle.py:13`
-- [x] Step 3.3: `gen.py` `random_request`, `permute_request` and `max_request` — `tests/gen.py:53`
+- [x] Step 3.3: `gen.py` `random_request`, `permute_request` and `max_request` — `tests/gen.py:53` (superseded — see Correction 2026-10-11)
 - [x] Step 3.4: Self-tests pinned to hand-derived values (sample session 7 active and optimum 61; the seven tiny public requests; one illegal response per legal-set condition; certificate formula by hand) and `permute_request` preserving `best_utility` on 30 generated requests — `tests/test_checker_oracle.py:176`
 - [x] Step 3.5: Gate run: `python3.11 -m unittest discover -s tests -p 'test_checker_oracle.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`
 
@@ -134,7 +145,12 @@ Work was done in worktree `.claude/worktrees/agent-a36fe6f91b2ba87e3` (branch `w
 - DD-P3-4 (2026-10-11): `oracle` is not fully independent of `checker`: it calls `checker.active_cards` (allowed by the brief). Its legality test is its own code. A bug in visibility or supersession would therefore be shared between the two; that part is pinned by hand-derived tests (`SupersessionTests`, tiny i_f4bb, sample session 7 active).
 - DD-P3-5 (2026-10-11): `gen.max_request` sets `mandatory: []`, so it is always feasible. In the non-profile form the 200-card requires chain is `c0 -> c1 -> ... -> c199`, the cycle is `c200 -> c201 -> c202 -> c200`, and groups `g0..g19` are only on cards `c203` and above. `gen.random_request` draws feature weights from 1-100, not 1-1,000.
 
-Tests: 45 passed, 0 failed (`Ran 45 tests in 0.413s`, `OK`, rc=0)
+Tests: 45 passed, 0 failed (`Ran 45 tests in 0.413s`, `OK`, rc=0) (superseded — see Correction 2026-10-11)
+
+#### Corrections
+- Correction (2026-10-11): in the validated tree (`af7d928`) `tests/gen.py` is 250 lines with `random_request` at `tests/gen.py:62`, `max_request` at `tests/gen.py:136` and `permute_request` at `tests/gen.py:208`; `tests/gen.py:53` is now inside `_random_pairs`. The `checker.py` and `oracle.py` line references and sizes are still correct.
+- Correction (2026-10-11): `tests/test_checker_oracle.py` is 618 lines with 50 tests; the five added are at `tests/test_checker_oracle.py:488`, `:513`, `:525`, `:536` and `:541`. "45 passed" is the landing gate; the merged-tree gate is 50 tests, `rc=0` (parent's run).
+- Correction (2026-10-11): PR #15 is merged after three Codex rounds: `gen.random_request` raises `ValueError` on out-of-range arguments (`eb32858`) and clamps the budget before conversion (`132ab34`). Details section 4 ("Always returns a request", details:142) no longer holds for out-of-range arguments. No DD- entry recorded this when it landed; this entry is the record.
 
 ---
 
@@ -147,16 +163,16 @@ Started: 2026-10-11T20:02:18Z
 Completed: 2026-10-11T20:07:41Z
 
 #### Files Modified
-- `tools/build_package.py:1` — new (137 lines). `build(source, out, verify=False)`, `check_resources`, `planned_files`, `verify_results`; CLI `--out`, `--source` (default parent of `tools/`), `--verify-results`. Baseline hashes at `tools/build_package.py:21`.
-- `tools/run_recorded.sh:1` — new (65 lines, executable). Docker recorder run with `--cpus=2 --network none`, no memory cap, relative paths inside the container.
-- `tools/check_results.py:1` — new (261 lines). `evaluate(results, corpus, checker, ...)`, `render(summary)`, `stdout_is_one_object`, `nearest_rank_p95`, `load_checker` (loads `tests/checker.py` by path); CLI `<dir>`, `--json PATH`, `--allow-wrong`. Baseline hashes at `tools/check_results.py:22`.
+- `tools/build_package.py:1` — new (137 lines). `build(source, out, verify=False)`, `check_resources`, `planned_files`, `verify_results`; CLI `--out`, `--source` (default parent of `tools/`), `--verify-results`. Baseline hashes at `tools/build_package.py:21`. (superseded — see Correction 2026-10-11)
+- `tools/run_recorded.sh:1` — new (65 lines, executable). Docker recorder run with `--cpus=2 --network none`, no memory cap, relative paths inside the container. (superseded — see Correction 2026-10-11)
+- `tools/check_results.py:1` — new (261 lines). `evaluate(results, corpus, checker, ...)`, `render(summary)`, `stdout_is_one_object`, `nearest_rank_p95`, `load_checker` (loads `tests/checker.py` by path); CLI `<dir>`, `--json PATH`, `--allow-wrong`. Baseline hashes at `tools/check_results.py:22`. (superseded — see Correction 2026-10-11)
 - `tools/make_zip.py:1` — new (64 lines). Sorted entries at the archive root, timestamp 1980-01-01, deflate level 9, mode 0644 or 0755.
-- `tests/test_tools.py:1` — new (280 lines, 18 tests). Loads the three Python tools by path; all file work in `tempfile` directories.
+- `tests/test_tools.py:1` — new (280 lines, 18 tests). Loads the three Python tools by path; all file work in `tempfile` directories. (superseded — see Correction 2026-10-11)
 - `.gitignore` — NOT edited (parent instruction: `build/` and `.claude/worktrees/` are already ignored on main; this supersedes the plan's "Add `build/` to `.gitignore`").
 
 #### Steps Completed
-- [x] Step 4.1: `build_package.py`, `run_recorded.sh`, `make_zip.py`, `check_results.py` — `tools/build_package.py:95`, `tools/run_recorded.sh:19`, `tools/make_zip.py:33`, `tools/check_results.py:94`. The `.gitignore` part of this step was withdrawn by the parent (see Files Modified).
-- [x] Step 4.2: `tests/test_tools.py` — byte-identical recorder and corpus copy (`tests/test_tools.py:75`), refusal on a hash mismatch simulated on a temp copy of `resources/` (`tests/test_tools.py:89`), zip entries at the archive root without `__pycache__` or `.DS_Store` (`tests/test_tools.py:152`); also `--verify-results`, deterministic zip bytes, and `check_results.evaluate` on two real corpus requests.
+- [x] Step 4.1: `build_package.py`, `run_recorded.sh`, `make_zip.py`, `check_results.py` — `tools/build_package.py:95`, `tools/run_recorded.sh:19`, `tools/make_zip.py:33`, `tools/check_results.py:94`. The `.gitignore` part of this step was withdrawn by the parent (see Files Modified). (superseded — see Correction 2026-10-11)
+- [x] Step 4.2: `tests/test_tools.py` — byte-identical recorder and corpus copy (`tests/test_tools.py:75`), refusal on a hash mismatch simulated on a temp copy of `resources/` (`tests/test_tools.py:89`), zip entries at the archive root without `__pycache__` or `.DS_Store` (`tests/test_tools.py:152`); also `--verify-results`, deterministic zip bytes, and `check_results.evaluate` on two real corpus requests. (superseded — see Correction 2026-10-11)
 - [x] Step 4.3: Stub dry run under Docker in a scratch directory outside the repo (commands and output below).
 - [x] Step 4.4: `resources/` hashes equal the baseline after the dry run (output below).
 
@@ -176,7 +192,7 @@ $ python3.11 tools/check_results.py $S/pkg --json $S/summary.json > $S/check.out
 check rc=1
 ```
 
-Key lines of `$S/check.out`:
+Key lines of `$S/check.out`: (superseded — see Correction 2026-10-11)
 
 ```
 - ok: runner_sha256 (87694477eca9636ed78766d4473821befb9d388bf2444b2e1b5310f5e6ca5943)
@@ -202,7 +218,7 @@ RESULT: FAIL (26 of 28 records failed, 0 integrity checks failed)
 
 Table verdict counts: 2 `pass` (the two known-invalid requests, where the stub's `invalid` is the right answer), 26 `FAIL`. No `__pycache__` was left in `$S/pkg` after the run. The stub timings above are recorder overhead only and are not solver measurements.
 
-Round trip of the recorded results (same scratch tree, after `cp $S/pkg/benchmark_results.json $S/src/`):
+Round trip of the recorded results (same scratch tree, after `cp $S/pkg/benchmark_results.json $S/src/`): (superseded — see Correction 2026-10-11)
 
 ```
 $ python3.11 tools/build_package.py --source $S/src --out $S/pkg3 --verify-results; echo "verify rc=$?"
@@ -228,12 +244,20 @@ $ shasum -a 256 resources/benchmark_runner.py resources/benchmark_inputs.json
 
 #### Discrepancies & Decisions
 - DD-P4-01 (2026-10-11): the two contract-breaking public requests are identified by id (`KNOWN_INVALID_IDS`, `tools/check_results.py:30`) and not by re-validating, so the script never imports the solver. A corpus with other invalid requests would be judged as valid; the script is for the public corpus only.
-- DD-P4-02 (2026-10-11): the certificate gap (`100*U <= 105*utility*s`) and the pair consistency ratio (`200*(H-L) <= H`) are printed and written to the JSON summary but do not change the exit code; details section 9 lists them under "prints", not "asserts". Certificate shape errors from the checker (`certificate:` prefix) DO fail the record.
+- DD-P4-02 (2026-10-11): the certificate gap (`100*U <= 105*utility*s`) and the pair consistency ratio (`200*(H-L) <= H`) are printed and written to the JSON summary but do not change the exit code; details section 9 lists them under "prints", not "asserts". Certificate shape errors from the checker (`certificate:` prefix) DO fail the record. (superseded — see Correction 2026-10-11)
 - DD-P4-03 (2026-10-11): beyond details section 9, `check_results.py` also asserts that record ids equal the corpus ids in order, that each `input_sha256` equals the canonical hash of the corpus request, and that the `benchmark_inputs.json` on disk matches the baseline.
-- DD-P4-04 (2026-10-11): `run_recorded.sh` refuses to run when `benchmark_results.json` already exists in the directory (a stale file would hide a failed run) and never deletes it. `build_package.py` refuses a non-empty `--out` and a source without `context_solver.py`; a missing `README.md` is a warning only.
+- DD-P4-04 (2026-10-11): `run_recorded.sh` refuses to run when `benchmark_results.json` already exists in the directory (a stale file would hide a failed run) and never deletes it. `build_package.py` refuses a non-empty `--out` and a source without `context_solver.py`; a missing `README.md` is a warning only. (superseded — see Correction 2026-10-11)
 - DD-P4-05 (2026-10-11): `--allow-wrong` is implemented as asked (report printed, exit 0, a notice on stderr). It was not used in the dry run.
 
-Tests: 18 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_tools.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`; `gate.log` reads `Ran 18 tests in 0.493s` and `OK`)
+Tests: 18 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_tools.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`; `gate.log` reads `Ran 18 tests in 0.493s` and `OK`) (superseded — see Correction 2026-10-11)
+
+#### Corrections
+- Correction (2026-10-11): counts in the validated tree (`af7d928`, after rework `212e89c`): `tools/build_package.py` 155 lines, `tools/run_recorded.sh` 73, `tools/check_results.py` 367, `tests/test_tools.py` 500 lines and 29 tests (gate 29 tests, `rc=0`, parent's run). Line references moved: `build_package.py:95` to `:110` and `:21` to `:23`; `run_recorded.sh:19` to `:20`; `check_results.py:94` to `:124`, `:22` to `:25`, `:30` to `:37`; `test_tools.py:75`, `:89`, `:152` to `:77`, `:91`, `:208`. After the later reworks below, `tests/test_tools.py` has 44 tests.
+- Correction (2026-10-11): PR #17 reworks after this section was written: `212e89c` (six Codex findings); `c463fd4` (round 2: atomic verification, recorder required in inventories, exit-status propagation, capability verdicts gated on core checks); `84ac28d` (tests run from the package layout); `aa0dde2` (durable tracking artifacts ship in the package; `make_zip.py` excludes `gate.log` and `*.pyc`).
+- Correction (2026-10-11): DD-P4-02's last sentence is no longer true. Certificate shape errors no longer fail the core verdict; `tools/check_results.py:198-200` routes them to an optional section. This narrows details:230 and had no DD- entry; this entry is the record.
+- Correction (2026-10-11): the round trip above (`--verify-results` giving `rc=0` on a source with no `README.md` and no `benchmark_run.log`) is refused by the current tool (`tools/build_package.py:33`, `:81-85`). Since `c463fd4` every build is staged and verified in a temporary directory, and final builds require results, log and README. DD-P4-04's "a missing `README.md` is a warning only" holds only for the plain staging build.
+- Correction (2026-10-11): the check names and text quoted under "Key lines" changed (`tools/check_results.py:158`, `:313`), and the container command at `tools/run_recorded.sh:10` now exits with the recorder status, so it no longer matches details:226. The annotations for quoted output sit on the lead-in lines; the pasted output is left as recorded.
+- Correction (2026-10-11): the step 4.3 dry run above is from the 65-line script, before the rework. The reworked `tools/run_recorded.sh` ran at 14:00 PDT on a clean extraction of the package built from `integration` at `0f4d6cc`: recorder `rc=0`, 28 log lines, `tools/check_results.py` `rc=0`, `RESULT: PASS (0 of 28 records failed, 0 integrity checks failed)`, all 14 integrity checks ok, `quota_vcpus == 2.0`.
 
 ---
 
@@ -247,32 +271,40 @@ Completed: 2026-10-11T20:09:32Z
 
 #### Files Modified
 - `dcp_exact.py:1` — new, 234 lines. `solve_exact(p, deadline, incumbent=None) -> (mask, proven)` at `dcp_exact.py:63`; closure-aware greedy seed `_greedy` at `dcp_exact.py:27`. Explicit stack, no recursion.
-- `tests/test_exact.py:1` — new, 314 lines, 11 tests: oracle agreement, 24-card stress over 16 instance families, deadline, incumbent and deep-chain behaviour.
+- `tests/test_exact.py:1` — new, 314 lines, 11 tests: oracle agreement, 24-card stress over 16 instance families, deadline, incumbent and deep-chain behaviour. (superseded — see Correction 2026-10-11)
 
 #### Steps Completed
 - [x] Step 5.1: Implement `solve_exact` per details section 5 — `dcp_exact.py:63`
-- [x] Step 5.2: Oracle comparison tests and the 24-card stress test — `tests/test_exact.py:171` (oracle), `tests/test_exact.py:230` (stress)
+- [x] Step 5.2: Oracle comparison tests and the 24-card stress test — `tests/test_exact.py:171` (oracle), `tests/test_exact.py:230` (stress) (superseded — see Correction 2026-10-11)
 - [x] Step 5.3: Run the gate for `tests/test_exact.py` — rc=0
 
 #### Issues Encountered
 - The plan's `[MEDIUM]` assumption (the two bounds finish 24-card worst cases under 1.5 s) held for the three families the plan names from the first version (worst 0.003 s), but NOT for a family the plan does not name. A probe outside the gate found budgeted maximum coverage with wide, lightly overlapping covers (24 equal-token cards, 1,000 features, 40 to 64 covers each, budget 40% of the token sum) taking 11.4 s, and sparse-conflict independent set (private near-equal features, no budget pressure) taking 0.7 s. Per the step 5.2 guard the search was strengthened before closing: marginal gains are now carried down the stack and adjusted only by the newly covered features, the knapsack bound runs before the union bound, and the union bound uses byte tables. Same probe after the change: 0.31 to 0.96 s for the coverage family across three seeds, 0.01 to 0.2 s for the independent-set family.
 - Residual risk [MEDIUM]: the coverage family is the worst found and has little margin. Measured worst case at 24 active cards: **1.065 s**, family "24 equal-token cards, 1,024 features, 50 to 64 covers per card, budget 33% of the token sum" (probe script, 4 instances, host under load from parallel phases; the same family measured 1.374 s before the last change). Inside the gate the worst is 0.308 s (`k-cover-wide case 2`, 80 cases). Only 12 probe instances of the coverage variants were timed, so a hidden instance of this shape above 1.5 s on the recorded-run host cannot be ruled out. The solver stays exact whatever the time; the exposure is the caller's deadline, which Phase 8 owns.
-- First deadline test failed (0.115 s against a 0.07 s limit at 500 usable cards) with the clock read every 32 nodes; fixed by DD-P5-2, then passed.
+- First deadline test failed (0.115 s against a 0.07 s limit at 500 usable cards) with the clock read every 32 nodes; fixed by DD-P5-2, then passed. (superseded — see Correction 2026-10-11)
 - `gate.log` is written in the worktree root by the gate and was not committed; `git status --short` does not list it (ignored).
-- NOT RUN: the full `python3.11 -m unittest discover -s tests -v` suite (only this phase's file, per the phase rule); no timing inside Docker.
+- NOT RUN: the full `python3.11 -m unittest discover -s tests -v` suite (only this phase's file, per the phase rule); no timing inside Docker. (superseded — see Correction 2026-10-11)
 
 #### Discrepancies & Decisions
 - DR-P5-1: wide maximum-coverage instances at 24 active cards are far harder for bounds (a) and (b) than the plan's three stress families (11.4 s before strengthening; evidence in Issues Encountered). The plan's stress list does not cover them; they were added to the gate as `k-cover-wide` and `k-cover-quarter`, with `independent-set-1` and `independent-set-2`.
 - DD-P5-1 (2026-10-11): eligibility uses `closure_conflict[c] & S == 0` instead of the details' `conflict[c] & S == 0`. It is a subset of the details' eligible set and still contains every card a legal extension can add (a card's whole closure joins the set, so no closure member may conflict with S), so both bounds stay valid and get tighter.
-- DD-P5-2 (2026-10-11): the clock is read once per about 4,096 card visits rather than every 256 nodes as details section 5 says. With 500 usable cards a node costs about 1 ms, so 256 nodes would overshoot the deadline by far more than 20 ms; the work counter keeps the overshoot near 1 ms at any size. At 24 cards this is a read every 100 nodes or so.
+- DD-P5-2 (2026-10-11): the clock is read once per about 4,096 card visits rather than every 256 nodes as details section 5 says. With 500 usable cards a node costs about 1 ms, so 256 nodes would overshoot the deadline by far more than 20 ms; the work counter keeps the overshoot near 1 ms at any size. At 24 cards this is a read every 100 nodes or so. (superseded — see Correction 2026-10-11)
 - DD-P5-3 (2026-10-11): bound (a) is evaluated on every node only while it prunes at least 1 in 16 of its tries; otherwise on one node in 16. Skipping a bound cannot lose optimality. Bound (b) and the plain gain-sum bound run on every node.
 - DD-P5-4 (2026-10-11): the greedy seed is skipped when an incumbent is given and more than 64 cards are usable (its cost there is quadratic); the first dive of the search is itself a greedy by gain per token.
-- DD-P5-5 (2026-10-11): features with weight 0 or less and features already covered by the mandatory set are masked out of the search; utility is counted relative to the mandatory set. Assumes feature weights are never negative [MEDIUM] (not checked against `dcp_validate` in this phase).
+- DD-P5-5 (2026-10-11): features with weight 0 or less and features already covered by the mandatory set are masked out of the search; utility is counted relative to the mandatory set. Assumes feature weights are never negative [MEDIUM] (not checked against `dcp_validate` in this phase). (superseded — see Correction 2026-10-11)
 - Instructions files: `~/.claude/instructions/python.md` and `python-tests.md` were NOT read (time limit); the code follows the conventions of `dcp_model.py` and `tests/test_model.py` instead.
 
-Tests: 11 passed, 0 failed — `python3.11 -m unittest discover -s tests -p 'test_exact.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`, `Ran 11 tests in 10.149s`, `OK`.
+Tests: 11 passed, 0 failed — `python3.11 -m unittest discover -s tests -p 'test_exact.py' -v > gate.log 2>&1; echo rc=$?` gave `rc=0`, `Ran 11 tests in 10.149s`, `OK`. (superseded — see Correction 2026-10-11)
 - Oracle comparisons, all equal with `proven` true: at least 300 of 420 generated requests with 1 to 16 active cards (the test asserts the 300 floor; infeasible draws are checked for agreement, `Infeasible` against `LookupError`, and not counted), 128 family cases at 10 to 16 active cards (16 families x 8), 7 cases at 18 and 20, 2 hard-family cases at 20, the three public small instances (12, 16 and 18 active) and `resources/director_session.json`.
-- 24 active cards: 80 cases (16 families x 5), each `proven` under 1.5 s; the 15 knapsack cases equal an independent dynamic programme; 32 cases re-solved on a renamed copy (`gen.permute_request`, different bit order) with equal utility. There is no oracle at 24 cards, so the non-knapsack 24-card cases have no independent optimum check beyond that.
+- 24 active cards: 80 cases (16 families x 5), each `proven` under 1.5 s; the 15 knapsack cases equal an independent dynamic programme; 32 cases re-solved on a renamed copy (`gen.permute_request`, different bit order) with equal utility. There is no oracle at 24 cards, so the non-knapsack 24-card cases have no independent optimum check beyond that. (superseded — see Correction 2026-10-11)
+
+#### Corrections
+- Correction (2026-10-11): PR #18 is merged; the Codex test findings are fixed in `bad13e8` (25 independently verified 24-card cases, cutoff assertions, 250 ms tolerance). In the validated tree (`af7d928`) `tests/test_exact.py` is 408 lines with 15 tests (gate 15 tests, `rc=0`, parent's run); the oracle test is at `tests/test_exact.py:211` and the stress test at `tests/test_exact.py:270`.
+- Correction (2026-10-11): the statement that non-knapsack 24-card cases have no independent optimum check is no longer true: `tests/test_exact.py:297-308` and `tests/test_exact.py:310-324` check 25 such cases against a hand value and the oracle.
+- Correction (2026-10-11): the deadline test no longer uses the 0.07 s limit recorded under Issues Encountered. It sets a 0.05 s deadline and asserts a return within 0.25 s (`tests/test_exact.py:364-368`), and does not assert `proven`.
+- Correction (2026-10-11): DD-P5-2's "near 1 ms at any size" contradicts its own figures. One clock read per about 4,096 card visits with 516 counted per node (`dcp_exact.py:157-158`) is about 8 nodes, so about 8 ms at 1 ms per node. The entry should have said "under about 10 ms". This is harmless against the 2.5 s and 3.5 s deadlines.
+- Correction (2026-10-11): DD-P5-5's assumption that feature weights are never negative is now [HIGH]: `dcp_validate.py:185` rejects weights below 1.
+- Correction (2026-10-11): timing inside Docker now exists. The wide-coverage family at `--cpus=2`: 10 of 10 proven, worst 1.88 s. That is above the plan's 1.5 s host figure and inside the 3.5 s exact deadline.
 
 ---
 
@@ -280,7 +312,7 @@ Tests: 11 passed, 0 failed — `python3.11 -m unittest discover -s tests -p 'tes
 
 
 ### Phase 6: Large-instance search
-Status: Blocked — code and tests are complete and the gate passes, but the plan's quality criterion (2.0 s result at least 99% of the reference on every public large instance) is NOT met; see DR-601.
+Status: Blocked — code and tests are complete and the gate passes, but the plan's quality criterion (2.0 s result at least 99% of the reference on every public large instance) is NOT met; see DR-601. (superseded — see Correction 2026-10-11; rework Complete)
 Started: 2026-10-11T20:02:19Z
 Completed: 2026-10-11T20:12:33Z (last clock reading before this entry was written; work stopped at the 18-minute limit)
 
@@ -354,6 +386,85 @@ The six unit-weight instances are the first six rows. Below 99% of the reference
 
 Tests: 10 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_search.py' -v > gate.log 2>&1; echo rc=$?` gave rc=0, "Ran 10 tests in 8.699s", OK; run on the final code)
 
+#### Rework r2 (seat-p6-search-r2)
+
+Seat: seat-p6-search-b. Started 2026-10-11T20:21:17Z, delivered 2026-10-11T20:51:49Z.
+Ref: `wip/phase-6-search-r2` @ `007b5969a81b530287646969ca4abf40cb799a00` (base `integration` @ `eeb05a2`).
+Files: `dcp_search.py` (rewritten search loop), `tests/test_search.py` (2 tests added). `tools/tune_search.py` unchanged; it still runs against the same interface.
+
+##### What was wrong
+
+The ejection-and-refill walk rescanned every card after each insertion (`refill` inside every move), accepted only non-worsening moves, and restarted from its best set. On the public large instances it stayed in the basin of its greedy start: 73 cards where 111 to 120 exist, about 37,000 where 49,814 exists. Measured again here with the old code at 10 s per instance: `i_5fccaf00f31313dcfc` 73, `i_91a2e8f7679a6871f4` 73, `i_27d35bf2cd22d3769a` 36,887, `i_dfcebb3746dc9feecb` 37,493, `i_97504cfbf824b0eeee` 40,572.
+
+##### What the structure analysis found
+
+- The block hypothesis is false [HIGH]. In each of the 13 instances the conflict graph is ONE connected component holding every card with a conflict (464 of 476, 416 of 428, 368 of 380, 320 of 332, 272 of 284), plus 12 cards of degree 0. No two cards share a neighbourhood, open or closed (every neighbourhood class has size 1). In `i_613d784770e53c543d` the common-neighbour counts of card pairs run 0 to 8 with a Poisson-like shape, for adjacent and non-adjacent pairs alike. That is a random regular graph, not cliques or slots, so there is no per-block enumeration and no multiple-choice knapsack to run.
+- The requirement structure is 8 cheap hub cards (2 to 7 tokens, no conflicts, no covers, 44 to 136 dependents each); every good set holds all 8. The other 4 degree-0 cards are expensive and cover nothing [HIGH, checked on `i_dfcebb3746dc9feecb` and `i_613d784770e53c543d`].
+- The strong solutions are far larger than what a random regular graph of that degree normally allows (120 of 416 at degree 24; the greedy and the old walk stop near 73), and the token budget is slack or just binding in them. This reads as a planted conflict-free set [MEDIUM: inferred, the generator is not available]. The weak mode is the ordinary independent-set basin; the strong mode is the planted set.
+
+##### The algorithm as built
+
+`solve_large(p, deadline, seed=20261011, *, max_moves=None)`; interface unchanged apart from `max_moves` accepting `None`.
+
+1. Construction as before: three greedy rules, keep the best. This is the floor that is returned if the deadline cuts in.
+2. Simulated annealing over legal sets. A move inserts one card with its requirement closure, evicts the selected cards that conflict with it and everything that depends on those, and sheds the cheapest-loss units while the budget is exceeded. No rescan of all cards per move (about 60,000 to 130,000 moves per second on this host, against about 15,000 to 25,000 before).
+3. Acceptance uses utility minus a token price (`LAMBDA` = 0.25 of the greedy set's utility per token), so that at equal utility the leaner set wins.
+4. Proposal: of two random cards, the one that conflicts with fewer selected cards (`TOURNAMENT`).
+5. Rounds of 5,000 moves, temperature from 1.0 to 0.03 of the mean utility per selected card; each round restarts from the best set seen and alternates the token price between 1.0 and 0.2 of its base (`LAM_CYCLE`). Slack-budget instances needed the low price, budget-tight ones the high price; alternating served both.
+6. Deadline: the loop stops ahead of the deadline by the slowest step seen so far (1 ms to 20 ms).
+
+Nothing assumes the public structure. Every state is legal by construction and the returned mask is checked with `is_legal` (falling back to the greedy set, then to `p.mandatory`).
+
+##### Exactness
+
+No instance is solved exactly and no optimality is proven. The method is a heuristic on a single connected graph; the brief's exactness route (clean decomposition) does not exist in these instances. The evidence for the level is agreement only: every seed, every permuted copy and a 20 s run reach the same value on 11 of 13 instances, and within 0.08 percent on the other two.
+
+##### Final table (2.0 s search deadline, 6 seeds and 4 `permute_request` copies per instance, 3 worker processes on a busy host)
+
+| instance | n | seeds min | seeds max | permuted min | permuted max | 200*(H-L)<=H | best known | 2.0 s min / best | fewest moves | longest wall s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| i_d377627acc7b53786a | 476 | 73602 | 73602 | 73602 | 73602 | yes | 73602 | 1.0000 | 133443 | 1.989 |
+| i_613d784770e53c543d (unit, cards) | 428 | 120 | 120 | 120 | 120 | yes | 120 | 1.0000 | 46750 | 2.001 |
+| i_6f0cb82b21cc17afba (unit) | 380 | 223 | 223 | 223 | 223 | yes | 223 | 1.0000 | 58031 | 2.003 |
+| i_5fccaf00f31313dcfc (unit) | 428 | 111 | 111 | 111 | 111 | yes | 111 | 1.0000 | 30106 | 2.003 |
+| i_d755f5d407b0d86c60 (unit) | 476 | 136 | 136 | 136 | 136 | yes | 136 | 1.0000 | 115314 | 1.983 |
+| i_27d35bf2cd22d3769a | 332 | 49814 | 49814 | 49814 | 49814 | yes | 49814 | 1.0000 | 192066 | 1.993 |
+| i_3b971612ce637e324b (unit) | 476 | 128 | 128 | 128 | 128 | yes | 128 | 1.0000 | 59756 | 2.018 |
+| i_a7373a7648d6ddce67 | 284 | 40568 | 40568 | 40568 | 40568 | yes | 40568 | 1.0000 | 268030 | 1.994 |
+| i_97504cfbf824b0eeee | 380 | 54775 | 54795 | 54775 | 54795 | yes | 54795 | 0.9996 | 85892 | 2.043 |
+| i_91a2e8f7679a6871f4 (unit) | 428 | 120 | 120 | 120 | 120 | yes | 120 | 1.0000 | 105470 | 2.003 |
+| i_8d29a9554dd222d976 | 476 | 71327 | 71371 | 71329 | 71359 | yes | 71386 | 0.9992 | 54598 | 2.022 |
+| i_dfcebb3746dc9feecb | 332 | 49814 | 49814 | 49814 | 49814 | yes | 49814 | 1.0000 | 153672 | 1.987 |
+| i_b05b69c48293a3d4b4 | 476 | 73602 | 73602 | 73602 | 73602 | yes | 73602 | 1.0000 | 259182 | 1.993 |
+
+"Best known" is the largest value seen in any run: this method at 20 s (seed 777), the previous method at 10 s (seed 777), and the 2.0 s runs above. The previous method at 10 s did not exceed the new one on any instance. Unit-weight rows are utility = number of covered features (one feature per card with a cover), so they read as card counts excluding the 8 hubs.
+
+Other acceptance items, measured on the final code:
+
+- A3: 18 public instances with at least 25 active cards: 0 illegal, 0 `check_response` failures. 220 generated requests (10 to 60 cards, versions, requires, groups, pairs, supersedes, mandatory; 76 infeasible draws skipped): 0 illegal, 0 failures. `gen.max_request`: legal, checker clean.
+- A4: 120 generated requests of 10 to 16 active cards at 0.08 s: 120 within 1 percent of `oracle.best_utility`, 0 illegal.
+- A5: largest public instance (`i_d755f5d407b0d86c60`, 476 cards) at a 2.0 s deadline: 1.992, 1.984, 1.992 s. `gen.max_request` at 2.0 s: 1.981 s in the acceptance run; in 36 further runs (three generator seeds, 2.0 s and 0.9 s) the latest return was 34 ms after the deadline, once, the rest 3 to 20 ms before it. Longest in the table above: 2.043 s (43 ms late). Before the slow-step guard one run was 105 ms late; that code is not what is delivered.
+
+##### Gaps (A6)
+
+- Low move counts. At 60,000 moves with 5,000-move rounds, 1 of 8 seeds on `i_27d35bf2cd22d3769a` returned the weak mode (37,379 against 49,814) and one run on `i_d377627acc7b53786a` returned 72,978 (0.85 percent low). At 150,000 moves all 13 instances passed over 8 seeds. The 2.0 s table above includes runs as low as 30,106 moves that still reached the strong value, but a grading host several times slower than this one is NOT RUN and could show the weak mode.
+- Weak planted signal. On a self-made instance (200 unit cards, 60 planted, degree about 14, equal tokens, budget exactly the planted set) the search reached 60 on 1 of 5 seeds for one draw (others 50) and 4 of 5 for another (other 49), at 40,000 and at 200,000 moves. The ordinary optimum there is about 50, so the planted set is only 20 percent larger; the public instances have it 50 to 60 percent larger. Hidden instances of that harder kind would be bimodal.
+- Permutation consistency is statistical, not structural: a canonical relabelling of the cards was considered and not built. Equal results on permuted copies come from every run reaching the same value.
+- The 25 to 64 card tier (0.9 s) was checked for legality and against the oracle on small requests only; no reliability table was made for it.
+
+##### Discrepancies and decisions
+
+- DR-R2-1: the brief's hypothesis (regular blocks, one alternative per slot) does not hold; see the analysis above. The multiple-choice knapsack DP was therefore not built.
+- DD-R2-1: the generic ejection walk was replaced, not kept as a fallback. The annealing makes no structural assumption, and A4 (120 of 120 within 1 percent of the oracle) shows no regression where the structure is absent.
+- DD-R2-2: a count-first phase (anneal with every feature weighing 1, then switch to the real weights) was built, measured and removed: it did not reduce the weak-mode rate.
+- DD-R2-3: `LAST_STATS["perturbations"]` now counts annealing rounds; `tools/tune_search.py` reads only `moves` and `greedy_utility`, both kept.
+- Analysis scripts lived in `scratch_analysis/` inside the worktree, were never added, and are deleted.
+
+Tests: `python3.11 -m unittest discover -s tests -p 'test_search.py' -v` rc=0, 12 tests OK. `python3.11 -m unittest discover -s tests -v` rc=0, 258 tests OK (run at 2026-10-11T20:50Z on the delivered tree).
+
+#### Corrections
+- Correction (2026-10-11): the Blocked status above describes the first delivery. The rework in "Rework r2" was verified by the orchestrator at 13:56 PDT (13 large instances, three seeds and two permuted copies each, 11 identical on all runs, two within 0.04 percent, all legal) and merged to PR #19.
+
 ---
 
 <!-- end of phase 6 section; do not edit below this line from phase 6 -->
@@ -375,11 +486,11 @@ Worked in worktree `agent-aeb0598f2739d1873` after `git merge --no-edit integrat
 
 #### Steps Completed
 - [x] Step 7.1: `profile_applies`, `solve_profile`, `build_certificate` per details section 7 — `dcp_profile.py:19`, `dcp_profile.py:39`, `dcp_profile.py:98`
-- [x] Step 7.2: Tests — `tests/test_profile.py:144` (oracle equality, 240 generated profile requests of 1 to 16 cards, with mandatory cards and supersession), `tests/test_profile.py:157` (mandatory card), `tests/test_profile.py:165` (superseded card), `tests/test_profile.py:247`, `tests/test_profile.py:254`, `tests/test_profile.py:261` (no tight certificate, returns `None`), `tests/test_profile.py:196` (contract maximum), `tests/test_profile.py:181` (past deadline returns `None`)
+- [x] Step 7.2: Tests — `tests/test_profile.py:144` (oracle equality, 240 generated profile requests of 1 to 16 cards, with mandatory cards and supersession), `tests/test_profile.py:157` (mandatory card), `tests/test_profile.py:165` (superseded card), `tests/test_profile.py:247`, `tests/test_profile.py:254`, `tests/test_profile.py:261` (no tight certificate, returns `None`), `tests/test_profile.py:196` (contract maximum), `tests/test_profile.py:181` (past deadline returns `None`) (superseded — see Correction 2026-10-11)
 - [x] Step 7.3: Public instances recorded below
 - [x] Step 7.4: Gate run, rc=0
 
-#### Public profile instances (from the gate output, `tests/test_profile.py:319` and `tests/test_profile.py:325`)
+#### Public profile instances (from the gate output, `tests/test_profile.py:319` and `tests/test_profile.py:325`) (superseded — see Correction 2026-10-11)
 
 | Instance | Active | Budget | Utility | Tokens | U | scale | 100*U | 105*utility*scale | solve_profile |
 |---|---|---|---|---|---|---|---|---|---|
@@ -389,7 +500,7 @@ Worked in worktree `agent-aeb0598f2739d1873` after `git merge --no-edit integrat
 Both gaps are zero: `U == utility * scale` (78170 * 1 and 58666 * 30 = 1759980), so each selection is proven optimal by its own certificate. For the unit-token instance the test also asserts utility equals the sum of the 93 largest card values. Both certificates pass `checker.check_response` on a full ok response and `checker.certificate_bound` reproduces the `U` above.
 
 #### Contract maximum
-`gen.max_request(random.Random(20261011), profile=True)` (500 active cards, budget 8,192): `solve_profile` returned a legal mask in 0.357 s inside the gate and 0.364 s in a separate run on the host (limit 1.5 s). Process `ru_maxrss` went from 20 MB before the call to 24 MB after (decision rows are at most 500 x 8,193 bytes).
+`gen.max_request(random.Random(20261011), profile=True)` (500 active cards, budget 8,192): `solve_profile` returned a legal mask in 0.357 s inside the gate and 0.364 s in a separate run on the host (limit 1.5 s). Process `ru_maxrss` went from 20 MB before the call to 24 MB after (decision rows are at most 500 x 8,193 bytes). (superseded — see Correction 2026-10-11)
 
 #### Issues Encountered
 - None blocking. No disagreement found between `resources/director_context_contract.md:124-145` and details section 7; no DR- entry.
@@ -398,10 +509,14 @@ Both gaps are zero: `U == utility * scale` (78170 * 1 and 58666 * 30 = 1759980),
 
 #### Discrepancies & Decisions
 - DD-P7-1 (2026-10-11): `solve_profile` checks the deadline every 16 items and also returns `None` early when the measured per-item time projects the finish past the deadline, so the caller's fallback keeps the remaining time. Details section 7 only says "finish inside the deadline or return `None`"; this is within it.
-- DD-P7-2 (2026-10-11): the certificate uses only the three break-card candidates and `(1, 0)` named in details section 7. It ignores mandatory choices (the contract's relaxation does too), so a request whose mandatory cards are poor value gets no certificate (`tests/test_profile.py:254`); the response is then sent without one.
-- DD-P7-3 (2026-10-11): `tests/test_profile.py` is 339 lines against the plan's estimate of about 120; the extra lines are the oracle, deadline and bound-validity tests. No scope beyond the two owned files.
+- DD-P7-2 (2026-10-11): the certificate uses only the three break-card candidates and `(1, 0)` named in details section 7. It ignores mandatory choices (the contract's relaxation does too), so a request whose mandatory cards are poor value gets no certificate (`tests/test_profile.py:254`); the response is then sent without one. (superseded — see Correction 2026-10-11)
+- DD-P7-3 (2026-10-11): `tests/test_profile.py` is 339 lines against the plan's estimate of about 120; the extra lines are the oracle, deadline and bound-validity tests. No scope beyond the two owned files. (superseded — see Correction 2026-10-11)
 
 Tests: 22 passed, 0 failed (`python3.11 -m unittest discover -s tests -p 'test_profile.py' -v > gate.log 2>&1; echo rc=$?` gave rc=0, "Ran 22 tests in 1.438s", OK)
+
+#### Corrections
+- Correction (2026-10-11): citations in the validated tree (`af7d928`): the tests cited at `tests/test_profile.py:247`, `:254`, `:261`, `:319` and `:325` are at `tests/test_profile.py:248`, `:255`, `:262`, `:320` and `:326` (DD-P7-2's citation is `:255`), and the file is 340 lines, not 339. One line was added between `:197` and `:247` after this section was written. Citations up to `:196` are correct.
+- Correction (2026-10-11): PR #16 is merged. `445b02f` and `c83f5d9` make the contract-maximum test require a legal mask with a 10 s limit (`tests/test_profile.py:202`, `:205-206`). The plan's 1.5 s figure, quoted above as "(limit 1.5 s)", is no longer asserted. Measured: 0.36 s on an idle host, 2.4 s on a loaded host. The file still has 22 tests.
 
 ---
 
@@ -448,6 +563,11 @@ Decisions:
 
 Tests: `python3.11 -m unittest discover -s tests -v`: rc=0, ran 289, passed 289, failed 0, errors 0, skipped 0 (89.8 s). Phase 8 adds 33 of them: `test_cli` 18, `test_corpus` 10, `test_differential` 2, `test_reference_scenarios` 3.
 
+#### Corrections
+- Correction (2026-10-11): the `Tests:` line above describes branch `38868eb` (289 tests). Merged-tree regression: 333 tests from the repository root and 337 from a clean package extraction, `rc=0` and 0 skipped in both (one branch merged between the two runs).
+- Correction (2026-10-11): PR #20, Codex rework `1786157`: hard 4.0 s watchdog, no-drain handling of oversized stdin, guarded response construction, non-zero exit on stdout failure, wall-time assertions, and exactness tests at 19 to 24 active cards. Before this commit an exception in response construction could answer `invalid` for a valid request (`dcp_pipeline.py:135-142` in the validated tree `af7d928`).
+- Correction (2026-10-11): Issues Encountered omits that the step 8.6 container trial returned utilities of 120, 223, 72, 136, 128 and 72 on six large instances. Those six instances have unit weights, so utilities in the low hundreds there are card counts and are not comparable with the weighted instances. The two values of 72 were the Phase 6 search gap; after the search rework (PR #19, see Phase 6 "Rework r2") the six values are 120, 223, 111, 136, 128 and 120. The consistency failure listed under Issues Encountered belongs to the same rework.
+
 ---
 
 <!-- end of phase 8 section; do not edit below this line from phase 8 -->
@@ -472,17 +592,45 @@ Tests: not run — phase 9 not started
 
 
 ### Phase 10: README
-Status: Pending
-Started: 
-Completed: 
 
-#### Files Modified
+Status: Complete with one open defect outside this phase's files (the regression command exits 1 from a package copy; see Issues Encountered)
+Started: 2026-10-11T20:45:42Z
+Completed: 2026-10-11T20:49:31Z
+Seat: seat-p10-readme. Base: integration @ af7d928fb4acf1fa0e74fd6d41ea6bff0dd1795a. Delivered: wip/phase-10-readme @ 49294247c3db2d0ca9251d31eabcc2ad91bf0d82.
 
-#### Steps Completed
+Files Modified:
+- `README.md` (new, 263 lines)
 
-#### Issues Encountered
+Steps Completed:
+- Step 10.1: `README.md` written from the code (`context_solver.py`, `dcp_pipeline.py`, `dcp_validate.py`, `dcp_model.py`, `dcp_exact.py`, `dcp_profile.py`, `dcp_search.py`, `tests/`, `tools/`), `docs/task-brief.md`, `resources/director_usage_notes.md`, `resources/director_context_contract.md` lines 147-157, and details section 10. Every recorded-run number is the token `TBD-MEASURED` (`grep -c "TBD-MEASURED" README.md` = 13 lines). The `dcp_search.py` section is marked `TBD-SEARCH`. `grep -c "resources/\|docs/" README.md` = 0.
+- Step 10.2: commands run from a package copy built with `python3.11 tools/build_package.py --out <job tmp>/pkg1` (rc=0, 30 files, built before `README.md` existed) and from an extraction of a zip of that copy.
 
-Tests: not run — phase 10 not started
+| README command | Where run | Exit code |
+|---|---|---|
+| `unzip director-context.zip -d director-context` | test zip made with `tools/make_zip.py` from the package copy (rc=0, 31 entries) | 0 |
+| `cd director-context` | the extraction | 0 |
+| `python3.11 context_solver.py < director_session.json` | the extraction; stdout equals the line shown in the README (utility 61) | 0 |
+| `python3.11 -m unittest discover -s tests` | package copy, run as `python3.11 -m unittest discover -s tests -v > gate.log 2>&1; echo rc=$?` | **1** (284 tests, 14 errors) |
+| `python3.11 tools/check_results.py .` | package copy; no `benchmark_results.json` exists before the recorded run, so it stops with `No such file or directory: 'benchmark_results.json'` | 1 (expected until Phase 9 output is in the package) |
+| `mkdir ../rerun` and `cp -R context_solver.py dcp_*.py tests tools benchmark_runner.py benchmark_inputs.json director_session.json ../rerun/` | package copy | 0 |
+| `bash tools/run_recorded.sh ../rerun` | NOT RUN (Docker, by instruction) | NOT RUN |
+| `docker run --rm --cpus=2 --network none ...` (shown as what the script runs) | NOT RUN (Docker, by instruction) | NOT RUN |
+| `python3.11 tools/check_results.py ../rerun` | package copy, on a host recorder run: fails only `quota_vcpus == 2.0 (None)`; 0 of 28 records failed | 1 (as the README states for a host run). NOT RUN on a Docker run |
+| `(cd ../rerun && python3.11 benchmark_runner.py --solution context_solver.py --inputs benchmark_inputs.json --output benchmark_results.json > benchmark_run.log 2>&1)` | rerun directory, on the macOS host | 0 |
+| `python3.11 tools/check_results.py ../rerun --allow-wrong` | package copy | 0 |
+
+Tool help checks: `python3.11 tools/build_package.py --help`, `tools/check_results.py --help`, `tools/make_zip.py --help`, `tools/tune_search.py --help`, `benchmark_runner.py --help`: rc=0 each.
+
+Issues Encountered:
+- The regression command exits 1 from a package copy. 14 errors, all `FileNotFoundError` for `<package>/resources/...`: `test_exact.OracleAgreementTest.test_sample_session` and `test_model.TestSampleSession` (setUpClass) read `resources/director_session.json`; 11 tests in `test_tools.BuildPackageTests` and `test_tools.CheckResultsTests` (setUpClass) read `resources/benchmark_runner.py` and `resources/benchmark_inputs.json`. The package has those files at its root and no `resources/`. Not fixed here: tests are outside this phase's scope. The README keeps the plain command; it will pass once the tests fall back to the package root (as `test_corpus.py` and `test_search.py` already do). Any change to a `tests/*.py` file must land before the recorded run, because the package build compares every `.py` with `python_sources_after`.
+- The host recorder run shows all three public consistency pairs outside 0.5% (host run, not the recorded run; no number copied into the README).
+- `tools/build_package.py` cannot run from the extracted archive (it reads the supplied files from the repository layout). The README says so and gives no command for it.
+
+Tests: `python3.11 -m unittest discover -s tests -v > gate.log 2>&1; echo rc=$?` from the package copy: rc=1, Ran 284 tests in 91.433s, FAILED (errors=14). From the repository root: NOT RUN.
+Later: commit 6930369 adds the "How this was built" section and the tracking-folder row at the owner's request (PR #21).
+
+#### Corrections
+- Correction (2026-10-11): the finding above that the regression command exits 1 from a package copy (284 tests, 14 errors) described the tree at `af7d928`. It was fixed by PR #22 (`a9bace3`, `tests/test_model.py`, `tests/test_exact.py`) and by `84ac28d` on PR #17 (`tests/test_tools.py`). Evidence: `python3.11 -m unittest discover -s tests > gate.log 2>&1; echo rc=$?` run by the orchestrator at 14:00 PDT in a clean extraction of the package built from `integration` at `0f4d6cc` gave `rc=0`, 337 tests, 0 skipped.
 
 ---
 
